@@ -178,8 +178,12 @@ var SUPA_URL = ‘https://xxmjlwrkbsbljixdzvbe.supabase.co’;
 var SUPA_KEY = ‘eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4bWpsd3JrYnNibGppeGR6dmJlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwNjg0MzMsImV4cCI6MjA5MTY0NDQzM30.l72wGWTYBdaO85LokwX7AIIFipFMR2FIu82WFRdE06Q’;
 
 async function supaFetch(method, path, body) {
+var controller = new AbortController();
+var timer = setTimeout(function(){ controller.abort(); }, 8000);
+try {
 var res = await fetch(SUPA_URL + ‘/rest/v1/’ + path, {
 method: method,
+signal: controller.signal,
 headers: {
 ‘apikey’: SUPA_KEY,
 ‘Authorization’: ’Bearer ’ + SUPA_KEY,
@@ -188,8 +192,13 @@ headers: {
 },
 body: body ? JSON.stringify(body) : undefined
 });
+clearTimeout(timer);
 if(method === ‘GET’) return await res.json();
 return res.ok;
+} catch(e) {
+clearTimeout(timer);
+throw e;
+}
 }
 
 // ===== 同期ステータス表示 =====

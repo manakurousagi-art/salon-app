@@ -101,13 +101,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
 .ei{font-size:40px;margin-bottom:12px;}
 #toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--txt);color:white;padding:10px 20px;border-radius:25px;font-size:13px;font-weight:600;opacity:0;transition:all .3s;z-index:9999;white-space:nowrap;pointer-events:none;}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-#sync-ind{display:flex;align-items:center;gap:4px;flex-shrink:0;}
-.sdot{width:7px;height:7px;border-radius:50%;background:#ccc;flex-shrink:0;transition:background .3s;}
-.sdot.ok{background:#7BAF9E;}
-.sdot.busy{background:#C4957A;animation:sdpulse .8s ease-in-out infinite;}
-.sdot.err{background:#E57373;}
-#sync-txt{font-size:10px;color:var(--txt-s);white-space:nowrap;}
-@keyframes sdpulse{0%,100%{opacity:1;}50%{opacity:.25;}}
 </style>
 </head>
 <body>
@@ -115,7 +108,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
   <div id="hdr">
     <svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="14" fill="#C4957A"/><ellipse cx="14" cy="15" rx="6" ry="4" fill="white" opacity=".9"/><circle cx="14" cy="14" r="3" fill="#2D2926"/><circle cx="15.2" cy="12.8" r="1" fill="white"/></svg>
     <h1>アイラッシュ電子カルテ</h1>
-    <div id="sync-ind"><div class="sdot" id="sdot"></div><span id="sync-txt">--</span></div>
   </div>
   <div id="content">
     <div id="screen-list" class="screen active">
@@ -137,7 +129,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
     </div>
     <div id="screen-csv" class="screen">
       <div class="scroll">
-        <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#2E7D32;background:#E8F5E9;border-bottom:1px solid #C8E6C9">☁️ クラウド同期</div><div style="padding:12px 14px"><div style="font-size:13px;color:var(--txt-s);margin-bottom:10px">複数台のiPadでデータを共有できます<br><span style="font-size:11px;color:var(--acc)">※ 30秒ごとに自動同期中</span></div><button class="btn bp bb2" onclick="syncFromCloud().then(function(){toast('☁️ 最新データを取得しました');})">📥 今すぐ取得</button><button class="btn bs bb2" style="margin-top:8px" onclick="pushToCloud().then(function(){toast('☁️ クラウドに保存しました');})">📤 クラウドに保存</button></div></div>
+        <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#2E7D32;background:#E8F5E9;border-bottom:1px solid #C8E6C9">☁️ クラウド同期</div><div style="padding:12px 14px"><div style="font-size:13px;color:var(--txt-s);margin-bottom:10px">複数台のiPadでデータを共有できます</div><button class="btn bp bb2" onclick="syncFromCloud()">📥 クラウドからデータを取得</button><button class="btn bs bb2" style="margin-top:8px" onclick="syncToCloud().then(function(){toast('☁️ クラウドに保存しました');})">📤 クラウドに保存</button></div></div>
         <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:var(--txt-s);background:var(--bg);border-bottom:1px solid var(--bdr)">📥 サロンボード CSV取込</div><div style="padding:12px 14px">
           <div class="uz" onclick="document.getElementById('cf').click()"><div style="font-size:32px;margin-bottom:8px">📂</div><div>CSVファイルを選択</div><div style="font-size:12px;margin-top:4px">UTF-8 / Shift-JIS 自動判別</div></div>
           <input type="file" id="cf" accept=".csv" style="display:none" onchange="handleCSV(this)">
@@ -178,12 +170,8 @@ var SUPA_URL = ‘https://xxmjlwrkbsbljixdzvbe.supabase.co’;
 var SUPA_KEY = ‘eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh4bWpsd3JrYnNibGppeGR6dmJlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwNjg0MzMsImV4cCI6MjA5MTY0NDQzM30.l72wGWTYBdaO85LokwX7AIIFipFMR2FIu82WFRdE06Q’;
 
 async function supaFetch(method, path, body) {
-var controller = new AbortController();
-var timer = setTimeout(function(){ controller.abort(); }, 8000);
-try {
 var res = await fetch(SUPA_URL + ‘/rest/v1/’ + path, {
 method: method,
-signal: controller.signal,
 headers: {
 ‘apikey’: SUPA_KEY,
 ‘Authorization’: ’Bearer ’ + SUPA_KEY,
@@ -192,86 +180,48 @@ headers: {
 },
 body: body ? JSON.stringify(body) : undefined
 });
-clearTimeout(timer);
 if(method === ‘GET’) return await res.json();
 return res.ok;
-} catch(e) {
-clearTimeout(timer);
-throw e;
-}
 }
 
-// ===== 同期ステータス表示 =====
-function setSyncStatus(state, txt){
-var dot=document.getElementById(‘sdot’), el=document.getElementById(‘sync-txt’);
-if(!dot||!el) return;
-dot.className=‘sdot’+(state===‘ok’?’ ok’:state===‘busy’?’ busy’:state===‘err’?’ err’:’’);
-el.textContent=txt||’’;
-}
-
-async function pushToCloud() {
-// 全顧客データをSupabaseに保存（sv()から呼ばれる、ループしない）
-setSyncStatus(‘busy’,‘保存中…’);
+async function syncToCloud() {
+// 全顧客データをSupabaseに保存
 var rows = customers.map(function(c) {
 return { id: c.id, data: c, updated_at: new Date().toISOString() };
 });
 for(var i=0; i<rows.length; i++) {
 await supaFetch(‘POST’, ‘customers’, rows[i]);
 }
-var t=new Date(); var hm=String(t.getHours()).padStart(2,‘0’)+’:’+String(t.getMinutes()).padStart(2,‘0’);
-setSyncStatus(‘ok’, hm+’ 保存済み’);
-console.log(‘Pushed to cloud:’, rows.length, ‘customers’);
-}
-
-async function syncToCloud() {
-return pushToCloud();
+console.log(‘Synced to cloud:’, rows.length, ‘customers’);
 }
 
 async function syncFromCloud() {
 try {
-setSyncStatus(‘busy’,‘取得中…’);
 var rows = await supaFetch(‘GET’, ‘customers?select=*&order=updated_at.desc’);
 if(rows && rows.length > 0) {
-var changed = false;
+// クラウドのデータをローカルにマージ
 rows.forEach(function(row) {
-if(!row.data || !row.id) return;
 var local = customers.find(function(c) { return c.id === row.id; });
 if(!local) {
-// 新規顧客（他のiPadで登録）
-var nc = row.data;
-nc._syncAt = row.updated_at;
-customers.push(nc);
-changed = true;
+customers.push(row.data);
 } else {
 // クラウドの方が新しければ上書き
-var cloudTime = new Date(row.updated_at).getTime();
-var localSyncTime = new Date(local._syncAt||0).getTime();
-if(cloudTime > localSyncTime) {
-var merged = row.data;
-merged._syncAt = row.updated_at;
-Object.assign(local, merged);
-changed = true;
+var cloudTime = new Date(row.updated_at);
+var localTime = new Date(local.updated_at || 0);
+if(cloudTime > localTime) {
+Object.assign(local, row.data);
 }
 }
 });
-if(changed) {
-svLocal(); // ローカルのみ保存（クラウドへ再送しない）
+localStorage.setItem(‘cs’,JSON.stringify(customers));
 renderList();
-// 詳細画面を開いていれば更新
-if(curCust) {
-var fresh = customers.find(function(c){ return c.id===curCust.id; });
-if(fresh){ curCust=fresh; renderDet(); }
+if(curCust){
+var fresh=customers.find(function(c){return c.id===curCust.id;});
+if(fresh){curCust=fresh;renderDet();}
 }
-}
-var t=new Date(); var hm=String(t.getHours()).padStart(2,‘0’)+’:’+String(t.getMinutes()).padStart(2,‘0’);
-setSyncStatus(‘ok’, hm+’ 同期済み’);
-} else {
-setSyncStatus(‘ok’,‘同期済み’);
 }
 } catch(err) {
 console.error(‘Sync error:’, err);
-setSyncStatus(‘err’,‘同期失敗’);
-toast(‘⚠️ 同期に失敗しました’);
 }
 }
 // ===== SUPABASE設定ここまで =====
@@ -291,12 +241,8 @@ function fmt(d){return d.getFullYear()+’-’+String(d.getMonth()+1).padStart(2
 function fmtD(d){var days=[‘日’,‘月’,‘火’,‘水’,‘木’,‘金’,‘土’];return d.getFullYear()+‘年’+(d.getMonth()+1)+‘月’+d.getDate()+‘日（’+days[d.getDay()]+’）’;}
 function sv(){
 localStorage.setItem(‘cs’,JSON.stringify(customers));
-// バックグラウンドでクラウドに保存（ループ防止のため専用関数）
-pushToCloud().catch(function(e){console.warn(‘cloud sync failed’,e);});
-}
-function svLocal(){
-// クラウド同期なし・ローカル保存のみ（syncFromCloud内で使用）
-localStorage.setItem(‘cs’,JSON.stringify(customers));
+// バックグラウンドでクラウドに保存
+syncToCloud().catch(function(e){console.warn(‘cloud sync failed’,e);});
 }
 function svSt(){localStorage.setItem(‘sl’,JSON.stringify(staffList));}
 function toast(m){var t=document.getElementById(‘toast’);t.textContent=m;t.classList.add(‘show’);setTimeout(function(){t.classList.remove(‘show’);},2200);}
@@ -348,16 +294,13 @@ var dateStr=y+’-’+String(m+1).padStart(2,‘0’)+’-’+String(d).padStart
 var hasRes=customers.some(function(c){
   return (c.reservations||[]).some(function(r){return r.date===dateStr;});
 });
-var dot=hasRes?'<div style="width:4px;height:4px;border-radius:50%;background:var(--acc);margin:1px auto 0"></div>':'<div style="height:5px"></div>';
-var curStr2=fmt(curDate);
-var st=(dateStr===curStr2)?'background:var(--txt);color:white;border-radius:50%':(dateStr===today?'background:var(--acc);color:white;border-radius:50%':'');
-html+='<div onclick="jumpToDate(\''+dateStr+'\');hideCalPicker();" style="cursor:pointer;text-align:center;padding:2px 0">'
-  +'<div style="width:28px;height:28px;line-height:28px;margin:0 auto;font-size:13px;'+st+'">'+d+'</div>'+dot
+
+
+  +'<div>'+d+'</div>'+dot
   +'</div>';
 ```
 
 }
-document.getElementById(‘cal-grid’).innerHTML=html;
 }
 
 function chgDate(d){curDate.setDate(curDate.getDate()+d);renderList();}
@@ -1059,21 +1002,14 @@ toast(‘✅ データをリセットしました’);
 
 renderList();
 // 起動時にクラウドから自動取得
-setSyncStatus(‘busy’,‘接続中…’);
 setTimeout(function(){
-syncFromCloud().catch(function(e){
-console.warn(‘auto sync failed’,e);
-setSyncStatus(‘err’,‘接続失敗’);
-});
+syncFromCloud().catch(function(e){console.warn(‘auto sync failed’,e);});
 },1500);
 
-// 30秒ごとに自動同期（他のiPadで書いたデータを取得）
+// 30秒ごとに自動同期
 setInterval(function(){
-syncFromCloud().catch(function(e){
-console.warn(‘auto sync failed’,e);
-setSyncStatus(‘err’,‘同期失敗’);
-});
-}, 30000);
+syncFromCloud().catch(function(e){console.warn(‘auto sync failed’,e);});
+},30000);
 
 </script>
 </body>

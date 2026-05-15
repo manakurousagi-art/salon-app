@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#FCE9EC;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FFF9C4;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -164,6 +164,21 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
 </div>
 <div id="toast"></div>
 <script>
+// ===== エラー表示（デバッグ用） =====
+window.addEventListener('error', function(e){
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:red;color:white;padding:10px;z-index:99999;font-size:14px;font-family:monospace;white-space:pre-wrap;';
+  d.textContent = '❌ エラー\n' + e.message + '\n' + (e.filename||'') + ':' + (e.lineno||'') + ':' + (e.colno||'');
+  document.body.appendChild(d);
+});
+window.addEventListener('unhandledrejection', function(e){
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:60px;left:0;right:0;background:orange;color:black;padding:10px;z-index:99999;font-size:14px;font-family:monospace;white-space:pre-wrap;';
+  d.textContent = '⚠️ Promise rejected\n' + (e.reason && e.reason.message ? e.reason.message : e.reason);
+  document.body.appendChild(d);
+});
+</script>
+<script>
 
 // ===== SUPABASE設定 =====
 var SUPA_URL = ‘https://xxmjlwrkbsbljixdzvbe.supabase.co’;
@@ -213,15 +228,13 @@ Object.assign(local, row.data);
 }
 }
 });
-localStorage.setItem(‘cs’,JSON.stringify(customers));
+sv();
 renderList();
-if(typeof curCust!==‘undefined’ && curCust){
-var fresh=customers.find(function(c){return c.id===curCust.id;});
-if(fresh){curCust=fresh;renderDet();}
-}
+toast(‘☁️ クラウドと同期しました（’ + rows.length + ‘件）’);
 }
 } catch(err) {
 console.error(‘Sync error:’, err);
+toast(‘⚠️ 同期に失敗しました’);
 }
 }
 // ===== SUPABASE設定ここまで =====
@@ -294,18 +307,13 @@ var dateStr=y+’-’+String(m+1).padStart(2,‘0’)+’-’+String(d).padStart
 var hasRes=customers.some(function(c){
   return (c.reservations||[]).some(function(r){return r.date===dateStr;});
 });
-var dot=hasRes?'<div style="width:4px;height:4px;border-radius:50%;background:#C4957A;margin:1px auto 0"></div>':'<div style="height:5px"></div>';
-var curStr=fmt(curDate);
-var st='';
-if(dateStr===curStr){st='background:#2D2926;color:white;border-radius:50%;';}
-else if(dateStr===today){st='background:#C4957A;color:white;border-radius:50%;';}
-html+='<div onclick="jumpToDate(\''+dateStr+'\');hideCalPicker();" style="cursor:pointer;text-align:center;padding:2px 0">'
-  +'<div style="width:28px;height:28px;line-height:28px;margin:0 auto;font-size:13px;'+st+'">'+d+'</div>'+dot
+
+
+  +'<div>'+d+'</div>'+dot
   +'</div>';
 ```
 
 }
-document.getElementById(‘cal-grid’).innerHTML=html;
 }
 
 function chgDate(d){curDate.setDate(curDate.getDate()+d);renderList();}
@@ -1010,10 +1018,6 @@ renderList();
 setTimeout(function(){
 syncFromCloud().catch(function(e){console.warn(‘auto sync failed’,e);});
 },1500);
-// 30秒ごとに自動同期（他のiPadのデータを取得）
-setInterval(function(){
-syncFromCloud().catch(function(e){console.warn(‘auto sync failed’,e);});
-},30000);
 
 </script>
 </body>

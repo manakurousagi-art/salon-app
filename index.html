@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#EBF5F7;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FCE9EC;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -294,13 +294,18 @@ var dateStr=y+’-’+String(m+1).padStart(2,‘0’)+’-’+String(d).padStart
 var hasRes=customers.some(function(c){
   return (c.reservations||[]).some(function(r){return r.date===dateStr;});
 });
-
-
-  +'<div>'+d+'</div>'+dot
+var dot=hasRes?'<div style="width:4px;height:4px;border-radius:50%;background:#C4957A;margin:1px auto 0"></div>':'<div style="height:5px"></div>';
+var curStr=fmt(curDate);
+var st='';
+if(dateStr===curStr){st='background:#2D2926;color:white;border-radius:50%;';}
+else if(dateStr===today){st='background:#C4957A;color:white;border-radius:50%;';}
+html+='<div onclick="jumpToDate(\''+dateStr+'\');hideCalPicker();" style="cursor:pointer;text-align:center;padding:2px 0">'
+  +'<div style="width:28px;height:28px;line-height:28px;margin:0 auto;font-size:13px;'+st+'">'+d+'</div>'+dot
   +'</div>';
 ```
 
 }
+document.getElementById(‘cal-grid’).innerHTML=html;
 }
 
 function chgDate(d){curDate.setDate(curDate.getDate()+d);renderList();}

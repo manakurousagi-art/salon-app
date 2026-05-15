@@ -213,33 +213,21 @@ Object.assign(local, row.data);
 }
 }
 });
-sv();
+localStorage.setItem(‘cs’,JSON.stringify(customers));
 renderList();
-toast(‘☁️ クラウドと同期しました（’ + rows.length + ‘件）’);
+if(typeof curCust!==‘undefined’ && curCust){
+var fresh=customers.find(function(c){return c.id===curCust.id;});
+if(fresh){curCust=fresh;renderDet();}
+}
 }
 } catch(err) {
 console.error(‘Sync error:’, err);
-toast(‘⚠️ 同期に失敗しました’);
 }
 }
 // ===== SUPABASE設定ここまで =====
 
-var staffList;
-try {
-staffList = JSON.parse(localStorage.getItem(‘sl’)||’[“佐藤”,“鈴木”,“田中”]’);
-if(!Array.isArray(staffList)) staffList = [‘佐藤’,‘鈴木’,‘田中’];
-} catch(e) {
-staffList = [‘佐藤’,‘鈴木’,‘田中’];
-localStorage.removeItem(‘sl’);
-}
-var customers;
-try {
-customers = JSON.parse(localStorage.getItem(‘cs’)||’[]’);
-if(!Array.isArray(customers)) customers = [];
-} catch(e) {
-customers = [];
-localStorage.removeItem(‘cs’);
-}
+var staffList = JSON.parse(localStorage.getItem(‘sl’)||’[“佐藤”,“鈴木”,“田中”]’);
+var customers = JSON.parse(localStorage.getItem(‘cs’)||’[]’);
 var curDate = new Date();
 var curStaff = ‘all’;
 var curCust = null;
@@ -253,7 +241,8 @@ function fmt(d){return d.getFullYear()+’-’+String(d.getMonth()+1).padStart(2
 function fmtD(d){var days=[‘日’,‘月’,‘火’,‘水’,‘木’,‘金’,‘土’];return d.getFullYear()+‘年’+(d.getMonth()+1)+‘月’+d.getDate()+‘日（’+days[d.getDay()]+’）’;}
 function sv(){
 localStorage.setItem(‘cs’,JSON.stringify(customers));
-// クラウド同期は一時的に無効化
+// バックグラウンドでクラウドに保存
+syncToCloud().catch(function(e){console.warn(‘cloud sync failed’,e);});
 }
 function svSt(){localStorage.setItem(‘sl’,JSON.stringify(staffList));}
 function toast(m){var t=document.getElementById(‘toast’);t.textContent=m;t.classList.add(‘show’);setTimeout(function(){t.classList.remove(‘show’);},2200);}
@@ -1012,7 +1001,14 @@ toast(‘✅ データをリセットしました’);
 }
 
 renderList();
-// 同期機能は一時的に無効化（動作確認のため）
+// 起動時にクラウドから自動取得
+setTimeout(function(){
+syncFromCloud().catch(function(e){console.warn(‘auto sync failed’,e);});
+},1500);
+// 30秒ごとに自動同期（他のiPadのデータを取得）
+setInterval(function(){
+syncFromCloud().catch(function(e){console.warn(‘auto sync failed’,e);});
+},30000);
 
 </script>
 </body>

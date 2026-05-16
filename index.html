@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#FFE8D6;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#F0F7E0;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -427,7 +427,23 @@ function saveKarteDraft(){
   var kmr = document.getElementById('kmr');
   var kml = document.getElementById('kml');
   var knt = document.getElementById('knt');
-  if(!kd) return; // カルテタブにいない
+  if(!kd) return;
+  
+  // 画像を小さく圧縮
+  var canvasData = '';
+  if(c){
+    try {
+      var maxW = 400;
+      var tmp = document.createElement('canvas');
+      var scale = c.width > maxW ? maxW/c.width : 1;
+      tmp.width = c.width * scale;
+      tmp.height = c.height * scale;
+      var tc = tmp.getContext('2d');
+      tc.drawImage(c, 0, 0, tmp.width, tmp.height);
+      canvasData = tmp.toDataURL('image/jpeg', 0.4);
+    } catch(e){ canvasData = ''; }
+  }
+  
   var draft = {
     date: kd?kd.value:'',
     staff: kst?kst.value:'',
@@ -435,10 +451,16 @@ function saveKarteDraft(){
     memo_r: kmr?kmr.value:'',
     memo_l: kml?kml.value:'',
     note: knt?knt.value:'',
-    canvas: c?c.toDataURL():'',
+    canvas: canvasData,
     editingIdx: window._editingRecordIdx
   };
-  try { localStorage.setItem('karteDraft_'+curCust.id, JSON.stringify(draft)); } catch(e){}
+  try { 
+    localStorage.setItem('karteDraft_'+curCust.id, JSON.stringify(draft));
+  } catch(e){
+    // 容量オーバーなら画像なしで保存
+    draft.canvas = '';
+    try { localStorage.setItem('karteDraft_'+curCust.id, JSON.stringify(draft)); } catch(e2){}
+  }
 }
 
 function restoreKarteDraft(){
@@ -720,17 +742,18 @@ function saveKarte(){
     var img='';
     if(c){
       try {
+        // 画像を小さくリサイズして圧縮
+        var maxW = 600;
+        var tmp=document.createElement('canvas');
+        var scale = c.width > maxW ? maxW/c.width : 1;
+        tmp.width = c.width * scale;
+        tmp.height = c.height * scale;
+        var tc=tmp.getContext('2d');
         if(bg && bg.complete && bg.naturalWidth>0){
-          var tmp=document.createElement('canvas');
-          tmp.width=c.width; tmp.height=c.height;
-          var tc=tmp.getContext('2d');
-          tc.drawImage(bg,0,0,c.width,c.height);
-          tc.drawImage(c,0,0);
-          img=tmp.toDataURL('image/jpeg',0.7);
-        } else {
-          // 背景がなくてもキャンバスだけで保存
-          img = c.toDataURL('image/jpeg',0.7);
+          tc.drawImage(bg, 0, 0, tmp.width, tmp.height);
         }
+        tc.drawImage(c, 0, 0, tmp.width, tmp.height);
+        img = tmp.toDataURL('image/jpeg', 0.5);
       } catch(imgErr) {
         console.warn('image save failed', imgErr);
         img = '';
@@ -759,7 +782,49 @@ function saveKarte(){
     } else {
       curCust.records.unshift(rec);
     }
-    sv();
+    
+    // localStorage保存（容量オーバー対策）
+    try {
+      localStorage.setItem('cs', JSON.stringify(customers));
+    } catch(quotaErr) {
+      // 容量オーバー：下書き類を全部削除して再試行
+      console.warn('quota exceeded, cleaning up drafts');
+      for(var i=localStorage.length-1; i>=0; i--){
+        var k = localStorage.key(i);
+        if(k && k.indexOf('karteDraft_')===0) localStorage.removeItem(k);
+      }
+      try {
+        localStorage.setItem('cs', JSON.stringify(customers));
+      } catch(quotaErr2) {
+        // それでもダメなら古いカルテの画像を削除
+        var msg = '保存容量の上限に達しました。\n\n';
+        msg += '古いカルテの画像を圧縮しますか？\n';
+        msg += '（メモやテキスト情報は残ります、手書き画像のみ削除）';
+        if(confirm(msg)){
+          customers.forEach(function(cu){
+            if(cu.records){
+              cu.records.forEach(function(r, idx){
+                if(idx > 0 && r.karte_img) r.karte_img = ''; // 最新以外の画像を削除
+              });
+            }
+          });
+          try {
+            localStorage.setItem('cs', JSON.stringify(customers));
+          } catch(e3){
+            alert('保存できません。データリセットが必要かもしれません。');
+            return;
+          }
+        } else {
+          return;
+        }
+      }
+    }
+    
+    // クラウド同期はバックグラウンドで（失敗しても続行）
+    if(typeof syncToCloud === 'function'){
+      syncToCloud().catch(function(e){console.warn('cloud sync failed',e);});
+    }
+    
     toast('📝 施術記録を保存しました');
     clearKarteDraft();
     window._editingRecordIdx = undefined;

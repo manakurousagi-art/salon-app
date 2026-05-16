@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#F0F7E0;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FCE4EC;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -139,6 +139,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
           <div style="display:flex;gap:8px;margin-top:10px"><input class="fi" id="ns" placeholder="スタッフ名を追加" style="flex:1"><button class="btn bp bsm" onclick="addStaff()">追加</button></div>
         </div></div>
         <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#C0392B;background:#FFF5F5;border-bottom:1px solid #FFD0D0">🗑️ データリセット</div><div style="padding:12px 14px">
+          <div style="font-size:12px;color:var(--txt-s);margin-bottom:8px">保存容量を確認・整理できます</div>
+          <button class="btn bs bb2" onclick="checkStorage()">📊 保存容量を確認</button>
+          <button class="btn bs bb2" style="margin-top:8px" onclick="cleanOldImages()">🧹 古いカルテ画像を削除して容量確保</button>
           <div style="font-size:13px;color:var(--txt-s);margin-bottom:12px">お客様データ・予約データ・スタッフ設定を全て削除します。CSVを再取込みする前にご利用ください。</div>
           <button class="btn bd bb2" onclick="resetAllData()">⚠️ 全データをリセットする</button>
         </div></div>
@@ -1128,6 +1131,85 @@ function addStaff(){
   staffList.push(n);svSt();inp.value='';renderStaff();toast('スタッフを追加しました');
 }
 function rmStaff(i){staffList.splice(i,1);svSt();renderStaff();}
+
+function checkStorage(){
+  var total = 0;
+  for(var k in localStorage){
+    if(localStorage.hasOwnProperty(k)){
+      total += (localStorage[k].length + k.length) * 2;
+    }
+  }
+  var mb = (total / 1024 / 1024).toFixed(2);
+  var imgCount = 0, totalImgSize = 0;
+  customers.forEach(function(c){
+    if(c.records){
+      c.records.forEach(function(r){
+        if(r.karte_img){
+          imgCount++;
+          totalImgSize += r.karte_img.length;
+        }
+      });
+    }
+  });
+  var imgMb = (totalImgSize / 1024 / 1024).toFixed(2);
+  alert('📊 保存容量\n\n使用量: ' + mb + ' MB / 約5 MB\n\nカルテ画像: ' + imgCount + '枚\n画像合計: ' + imgMb + ' MB\n顧客数: ' + customers.length + '人');
+}
+
+function cleanOldImages(){
+  var imgCount = 0;
+  customers.forEach(function(c){
+    if(c.records){
+      c.records.forEach(function(r){
+        if(r.karte_img) imgCount++;
+      });
+    }
+  });
+  if(imgCount === 0){
+    alert('削除できる画像がありません。');
+    return;
+  }
+  var msg = '古いカルテ画像を削除します。\n\n';
+  msg += '・各顧客の最新1枚は残します\n';
+  msg += '・テキスト情報（メモ・日付・スタッフ等）は全て残ります\n';
+  msg += '・クラウドにはバックアップされている可能性があります\n\n';
+  msg += '削除する画像: ' + imgCount + '枚 → 各顧客の最新を残し、それ以外を削除\n\n';
+  msg += '続行しますか？';
+  if(!confirm(msg)) return;
+  
+  var deleted = 0;
+  customers.forEach(function(c){
+    if(c.records){
+      c.records.forEach(function(r, idx){
+        if(idx > 0 && r.karte_img){
+          r.karte_img = '';
+          deleted++;
+        }
+      });
+    }
+  });
+  try {
+    localStorage.setItem('cs', JSON.stringify(customers));
+    alert('✅ ' + deleted + '枚の画像を削除しました。\n保存容量に空きができました。');
+  } catch(e){
+    // それでもダメなら全部削除
+    if(confirm('まだ容量が足りません。全てのカルテ画像を削除しますか？\n（テキスト情報は残ります）')){
+      var allDel = 0;
+      customers.forEach(function(c){
+        if(c.records){
+          c.records.forEach(function(r){
+            if(r.karte_img){ r.karte_img = ''; allDel++; }
+          });
+        }
+      });
+      try {
+        localStorage.setItem('cs', JSON.stringify(customers));
+        alert('✅ 合計 ' + allDel + '枚の画像を削除しました。');
+      } catch(e2){
+        alert('それでも保存できません。全データリセットが必要です。');
+      }
+    }
+  }
+}
 
 function resetAllData(){
   if(!confirm('全データ（お客様・予約・スタッフ設定）をリセットしますか？\nこの操作は元に戻せません。')){return;}

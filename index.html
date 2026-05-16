@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#FFF8E1;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#EDE7F6;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -884,13 +884,18 @@ function saveKarte(){
 function editRecord(idx){
   var rec = curCust.records[idx];
   if(!rec) return;
-  // 施術記録タブに切り替えて既存データを読み込む
   curDTab='karte';
   document.querySelectorAll('.dt').forEach(function(t,i){t.classList.toggle('active',i===2);});
   renderDet();
-  // データを読み込む
-  setTimeout(function(){
+  
+  // initKarteの完了を待ってからデータを読み込む
+  function loadEditData(retry){
+    retry = retry || 0;
+    var c = document.getElementById('kc');
     var kd=document.getElementById('kd');
+    if(!kd || !c || !karteCtx || c.width < 10){
+      if(retry < 30){ setTimeout(function(){loadEditData(retry+1);}, 100); return; }
+    }
     var kst=document.getElementById('kst');
     var kmn=document.getElementById('kmn');
     var kmr=document.getElementById('kmr');
@@ -902,20 +907,31 @@ function editRecord(idx){
     if(kmr) kmr.value=rec.memo_r||'';
     if(kml) kml.value=rec.memo_l||'';
     if(knt) knt.value=rec.note||'';
-    // 保存ボタンをこのレコードの上書き保存に変更
     window._editingRecordIdx = idx;
     var btn = document.querySelector('.bb2');
     if(btn) btn.textContent = '📝 この記録を上書き保存';
-    // カルテ画像を読み込む
-    if(rec.karte_img && karteCtx){
+    
+    // カルテ画像を読み込む（CORS対応）
+    if(rec.karte_img && karteCtx && c){
       var img = new Image();
+      img.crossOrigin = 'anonymous'; // CORS許可
       img.onload = function(){
-        karteCtx.drawImage(img,0,0,document.getElementById('kc').width,document.getElementById('kc').height);
+        try {
+          karteCtx.drawImage(img, 0, 0, c.width, c.height);
+        } catch(e){
+          console.warn('image draw failed', e);
+        }
       };
-      img.src = rec.karte_img;
+      img.onerror = function(){
+        console.warn('image load failed:', rec.karte_img);
+      };
+      // キャッシュバスター追加でCORSヘッダー取得を確実に
+      img.src = rec.karte_img + (rec.karte_img.indexOf('?')>=0?'&':'?') + 't=' + Date.now();
     }
     toast('✏️ 編集モード：内容を変更して保存してください');
-  }, 300);
+  }
+  
+  setTimeout(loadEditData, 200);
 }
 
 function renderHist(){

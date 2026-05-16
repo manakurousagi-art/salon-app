@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#E0F2E0;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FFE8D6;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -408,11 +408,76 @@ function swDet(tab,btn){
 }
 
 function renderDet(){
+  // タブ切替前に施術記録の下書きを保存
+  saveKarteDraft();
   var el=document.getElementById('dbody');
   if(curDTab==='basic')el.innerHTML=renderBasic();
   else if(curDTab==='counsel'){el.innerHTML=renderCounsel();setTimeout(initSig,200);}
-  else if(curDTab==='karte'){el.innerHTML=renderKarte();setTimeout(initKarte,150);}
+  else if(curDTab==='karte'){el.innerHTML=renderKarte();setTimeout(function(){initKarte();restoreKarteDraft();},150);}
   else if(curDTab==='hist')el.innerHTML=renderHist();
+}
+
+// 施術記録の下書きを保存・復元（タブ切替で消えないように）
+function saveKarteDraft(){
+  if(!curCust) return;
+  var c = document.getElementById('kc');
+  var kd = document.getElementById('kd');
+  var kst = document.getElementById('kst');
+  var kmn = document.getElementById('kmn');
+  var kmr = document.getElementById('kmr');
+  var kml = document.getElementById('kml');
+  var knt = document.getElementById('knt');
+  if(!kd) return; // カルテタブにいない
+  var draft = {
+    date: kd?kd.value:'',
+    staff: kst?kst.value:'',
+    menu: kmn?kmn.value:'',
+    memo_r: kmr?kmr.value:'',
+    memo_l: kml?kml.value:'',
+    note: knt?knt.value:'',
+    canvas: c?c.toDataURL():'',
+    editingIdx: window._editingRecordIdx
+  };
+  try { localStorage.setItem('karteDraft_'+curCust.id, JSON.stringify(draft)); } catch(e){}
+}
+
+function restoreKarteDraft(){
+  if(!curCust) return;
+  try {
+    var raw = localStorage.getItem('karteDraft_'+curCust.id);
+    if(!raw) return;
+    var draft = JSON.parse(raw);
+    var kd = document.getElementById('kd');
+    var kst = document.getElementById('kst');
+    var kmn = document.getElementById('kmn');
+    var kmr = document.getElementById('kmr');
+    var kml = document.getElementById('kml');
+    var knt = document.getElementById('knt');
+    if(kd && draft.date) kd.value = draft.date;
+    if(kst && draft.staff) kst.value = draft.staff;
+    if(kmn && draft.menu) kmn.value = draft.menu;
+    if(kmr && draft.memo_r) kmr.value = draft.memo_r;
+    if(kml && draft.memo_l) kml.value = draft.memo_l;
+    if(knt && draft.note) knt.value = draft.note;
+    if(draft.editingIdx !== undefined) window._editingRecordIdx = draft.editingIdx;
+    // canvas復元
+    if(draft.canvas){
+      var c = document.getElementById('kc');
+      if(c){
+        var img = new Image();
+        img.onload = function(){
+          var ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+        };
+        img.src = draft.canvas;
+      }
+    }
+  } catch(e){ console.warn('restore draft failed', e); }
+}
+
+function clearKarteDraft(){
+  if(!curCust) return;
+  try { localStorage.removeItem('karteDraft_'+curCust.id); } catch(e){}
 }
 
 function renderBasic(){
@@ -650,45 +715,61 @@ function clrKarte(){
 }
 
 function saveKarte(){
-  var c=document.getElementById('kc'),bg=document.getElementById('kbg');
-  var img='';
-  if(c&&bg&&bg.complete&&bg.naturalWidth>0){
-    var tmp=document.createElement('canvas');
-    tmp.width=c.width;tmp.height=c.height;
-    var tc=tmp.getContext('2d');
-    tc.drawImage(bg,0,0,c.width,c.height);
-    tc.drawImage(c,0,0);
-    img=tmp.toDataURL('image/jpeg',0.85);
-  }
-  var kd=document.getElementById('kd');
-  var kst=document.getElementById('kst');
-  var kmn=document.getElementById('kmn');
-  var kmr=document.getElementById('kmr');
-  var kml=document.getElementById('kml');
-  var knt=document.getElementById('knt');
-  var rec={
-    date:kd?kd.value:'',
-    staff:kst?kst.value:'',
-    menu:kmn?kmn.value:'',
-    memo_r:kmr?kmr.value:'',
-    memo_l:kml?kml.value:'',
-    note:knt?knt.value:'',
-    karte_img:img,
-    at:new Date().toISOString()
-  };
-  if(!curCust.records)curCust.records=[];
-  // 編集モードなら上書き、新規なら先頭に追加
-  if(window._editingRecordIdx !== undefined && window._editingRecordIdx >= 0){
-    curCust.records[window._editingRecordIdx] = rec;
+  try {
+    var c=document.getElementById('kc'),bg=document.getElementById('kbg');
+    var img='';
+    if(c){
+      try {
+        if(bg && bg.complete && bg.naturalWidth>0){
+          var tmp=document.createElement('canvas');
+          tmp.width=c.width; tmp.height=c.height;
+          var tc=tmp.getContext('2d');
+          tc.drawImage(bg,0,0,c.width,c.height);
+          tc.drawImage(c,0,0);
+          img=tmp.toDataURL('image/jpeg',0.7);
+        } else {
+          // 背景がなくてもキャンバスだけで保存
+          img = c.toDataURL('image/jpeg',0.7);
+        }
+      } catch(imgErr) {
+        console.warn('image save failed', imgErr);
+        img = '';
+      }
+    }
+    var kd=document.getElementById('kd');
+    var kst=document.getElementById('kst');
+    var kmn=document.getElementById('kmn');
+    var kmr=document.getElementById('kmr');
+    var kml=document.getElementById('kml');
+    var knt=document.getElementById('knt');
+    var rec={
+      date:kd?kd.value:'',
+      staff:kst?kst.value:'',
+      menu:kmn?kmn.value:'',
+      memo_r:kmr?kmr.value:'',
+      memo_l:kml?kml.value:'',
+      note:knt?knt.value:'',
+      karte_img:img,
+      at:new Date().toISOString()
+    };
+    if(!curCust.records)curCust.records=[];
+    if(window._editingRecordIdx !== undefined && window._editingRecordIdx >= 0){
+      curCust.records[window._editingRecordIdx] = rec;
+      window._editingRecordIdx = undefined;
+    } else {
+      curCust.records.unshift(rec);
+    }
+    sv();
+    toast('📝 施術記録を保存しました');
+    clearKarteDraft();
     window._editingRecordIdx = undefined;
-  } else {
-    curCust.records.unshift(rec);
+    curDTab='hist';
+    document.querySelectorAll('.dt').forEach(function(t,i){t.classList.toggle('active',i===3);});
+    renderDet();
+  } catch(err) {
+    console.error('saveKarte error:', err);
+    alert('保存エラー: ' + err.message);
   }
-  sv();
-  toast('📝 施術記録を保存しました');
-  curDTab='hist';
-  document.querySelectorAll('.dt').forEach(function(t,i){t.classList.toggle('active',i===3);});
-  renderDet();
 }
 
 function editRecord(idx){

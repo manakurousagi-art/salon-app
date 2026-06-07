@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#E0F2F1;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FFE4D9;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -128,7 +128,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
     </div>
     <div id="screen-csv" class="screen">
       <div class="scroll">
-        <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#2E7D32;background:#E8F5E9;border-bottom:1px solid #C8E6C9">☁️ クラウド同期</div><div style="padding:12px 14px"><div style="font-size:13px;color:var(--txt-s);margin-bottom:10px">複数台のiPadでデータを共有できます</div><button class="btn bp bb2" onclick="syncFromCloud()">📥 クラウドからデータを取得</button><button class="btn bs bb2" style="margin-top:8px" onclick="syncToCloud().then(function(){toast('☁️ クラウドに保存しました');})">📤 クラウドに保存</button></div></div>
+        <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#2E7D32;background:#E8F5E9;border-bottom:1px solid #C8E6C9">☁️ クラウド同期</div><div style="padding:12px 14px"><div style="font-size:13px;color:var(--txt-s);margin-bottom:10px">複数台のiPadでデータを共有できます<br><span style="font-size:11px;color:var(--acc)">※ 30秒ごとに自動同期中</span></div><button class="btn bp bb2" onclick="syncFromCloud().then(function(){toast('☁️ 最新データを取得しました');})">📥 今すぐ取得</button><button class="btn bs bb2" style="margin-top:8px" onclick="pushAllToCloud().then(function(){toast('☁️ クラウドに保存しました');})">📤 全データをクラウドに保存</button></div></div>
         <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:var(--txt-s);background:var(--bg);border-bottom:1px solid var(--bdr)">📥 サロンボード CSV取込</div><div style="padding:12px 14px">
           <div class="uz" onclick="document.getElementById('cf').click()"><div style="font-size:32px;margin-bottom:8px">📂</div><div>CSVファイルを選択</div><div style="font-size:12px;margin-top:4px">UTF-8 / Shift-JIS 自動判別</div></div>
           <input type="file" id="cf" accept=".csv" style="display:none" onchange="handleCSV(this)">
@@ -187,44 +187,103 @@ async function supaFetch(method, path, body) {
 }
 
 async function syncToCloud() {
-  // 全顧客データをSupabaseに保存
-  var rows = customers.map(function(c) {
-    return { id: c.id, data: c, updated_at: new Date().toISOString() };
-  });
-  for(var i=0; i<rows.length; i++) {
-    await supaFetch('POST', 'customers', rows[i]);
+  // 変更があった顧客（_dirty=true）だけプッシュする
+  var dirties = customers.filter(function(c){ return c._dirty; });
+  if(dirties.length === 0) return;
+  for(var i=0; i<dirties.length; i++) {
+    var c = dirties[i];
+    // _dirtyフラグはクラウドに保存しないように一時退避
+    var ts = c.updated_at || new Date().toISOString();
+    c.updated_at = ts;
+    var dataCopy = {};
+    for(var k in c){ if(k !== '_dirty') dataCopy[k] = c[k]; }
+    try {
+      await supaFetch('POST', 'customers', { id: c.id, data: dataCopy, updated_at: ts });
+      delete c._dirty; // 成功したらフラグクリア
+    } catch(e) {
+      console.warn('push failed for', c.id, e);
+      // _dirty残してリトライ可能に
+    }
   }
-  console.log('Synced to cloud:', rows.length, 'customers');
+  // _dirtyクリア後の状態を保存
+  localStorage.setItem('cs', JSON.stringify(customers));
+  console.log('Synced to cloud:', dirties.length, 'customers');
+}
+
+// 全件強制プッシュ（手動同期ボタン用）
+async function pushAllToCloud() {
+  customers.forEach(function(c){
+    if(!c.updated_at) c.updated_at = new Date().toISOString();
+    c._dirty = true;
+  });
+  return syncToCloud();
 }
 
 async function syncFromCloud() {
   try {
     var rows = await supaFetch('GET', 'customers?select=*&order=updated_at.desc');
     if(rows && rows.length > 0) {
-      // クラウドのデータをローカルにマージ
+      var changed = false;
       rows.forEach(function(row) {
+        if(!row.data || !row.id) return;
         var local = customers.find(function(c) { return c.id === row.id; });
         if(!local) {
-          customers.push(row.data);
+          // 新規顧客（他のiPadで登録）
+          var nc = row.data;
+          nc.updated_at = row.updated_at;
+          customers.push(nc);
+          changed = true;
         } else {
-          // クラウドの方が新しければ上書き
-          var cloudTime = new Date(row.updated_at);
-          var localTime = new Date(local.updated_at || 0);
+          // ローカルに未送信の変更がある場合は触らない（重要！）
+          if(local._dirty) return;
+          var cloudTime = new Date(row.updated_at).getTime();
+          var localTime = new Date(local.updated_at || 0).getTime();
           if(cloudTime > localTime) {
+            // クラウドの方が新しい → 上書き
+            // recordsはマージ（両方の記録を保持）
+            var localRecs = local.records || [];
+            var cloudRecs = (row.data.records) || [];
+            var mergedRecs = mergeRecords(localRecs, cloudRecs);
             Object.assign(local, row.data);
+            local.records = mergedRecs;
+            local.updated_at = row.updated_at;
+            changed = true;
           }
         }
       });
-      localStorage.setItem('cs',JSON.stringify(customers));
-      renderList();
-      if(typeof curCust!=='undefined' && curCust){
-        var fresh=customers.find(function(c){return c.id===curCust.id;});
-        if(fresh){curCust=fresh;renderDet();}
+      if(changed){
+        localStorage.setItem('cs',JSON.stringify(customers));
+        renderList();
+        if(typeof curCust!=='undefined' && curCust){
+          var fresh=customers.find(function(c){return c.id===curCust.id;});
+          if(fresh){curCust=fresh;renderDet();}
+        }
       }
     }
   } catch(err) {
     console.error('Sync error:', err);
   }
+}
+
+// 施術記録の重複を排除してマージ（atタイムスタンプで識別）
+function mergeRecords(a, b){
+  var seen = {};
+  var result = [];
+  function add(r){
+    var key = r.at || (r.date + '_' + r.staff + '_' + r.menu);
+    if(!seen[key]){
+      seen[key] = true;
+      result.push(r);
+    }
+  }
+  (a || []).forEach(add);
+  (b || []).forEach(add);
+  result.sort(function(x,y){
+    var ax = x.at || x.date || '';
+    var ay = y.at || y.date || '';
+    return ay.localeCompare(ax);
+  });
+  return result;
 }
 // ===== SUPABASE設定ここまで =====
 
@@ -241,9 +300,14 @@ var kartePenColor='#1a1a1a',kartePenSize=3,karteEraser=false,karteHistory=[];
 
 function fmt(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function fmtD(d){var days=['日','月','火','水','木','金','土'];return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日（'+days[d.getDay()]+'）';}
-function sv(){
+function sv(customer){
+  // customer引数があれば、その顧客を変更マーク
+  if(customer){
+    customer.updated_at = new Date().toISOString();
+    customer._dirty = true;
+  }
   localStorage.setItem('cs',JSON.stringify(customers));
-  // バックグラウンドでクラウドに保存
+  // バックグラウンドでクラウドに保存（_dirtyの顧客だけ）
   syncToCloud().catch(function(e){console.warn('cloud sync failed',e);});
 }
 function svSt(){localStorage.setItem('sl',JSON.stringify(staffList));}
@@ -519,7 +583,7 @@ function renderBasic(){
         +'<div style="font-size:12px;color:var(--txt-s)">'+r.menu+' / 担当：'+r.staff+'</div></div>';
     }).join('')||'<div class="empty" style="padding:20px">予約なし</div>');
 }
-function upd(k,v){curCust[k]=v;sv();}
+function upd(k,v){curCust[k]=v;sv(curCust);}
 
 var CT={
   exte:'【まつげエクステ同意書】\n\n□ 持続性について\nまつげには目を外側から守る役割があり、角膜や結膜にゴミなどがあたらないよう保護しています。まつげは約2〜3ヶ月で生え変わり、一般的に1日に5本前後抜けています。3週間程度でリペアを推奨しておりますが、持続性には個人差があります。\n\n□ 注意事項\n以下の場合は施術をお断りする場合があります。\n・目元の皮膚や眼球に関する疾患、かぶれ、かゆみ等がある方\n・まつげが極端に短い、薄い、ダメージが強い等で施術が出来ないと判断した場合\n\n□ アレルギーについて\n・テープや絆創膏でかぶれる方\n・現在、目の周りにかぶれ、腫れ、ものもらい等がある方\n・1ヶ月以内にまつげパーマ施術をされている方\n・3ヶ月以内に目元の美容整形やレーシック手術された方\n・3ヶ月以内にアイラインのアートメイクをされた方\n・妊娠初期の方・体調不良の方\n\n□ 施術中の注意事項\n施術中は絶対に目を開けないでください。目元に違和感を感じられた際は、すぐスタッフに申し出てください。\n\n上記事項を確認し同意した場合は、以下にご署名をお願いします。',
@@ -588,7 +652,7 @@ function updChk(key,val,checked){
   if(checked&&!arr.includes(val))arr.push(val);
   if(!checked)arr=arr.filter(function(v){return v!==val;});
   curCust[ck][key]=arr;
-  sv();
+  sv(curCust);
 }
 function swCT(t){curCType=t;renderDet();}
 
@@ -620,14 +684,14 @@ function saveSig(tp){
   curCust['sign_img_'+tp]=c.toDataURL('image/png');
   curCust['sign_date_'+tp]=ds;
   curCust['sign_text_'+tp]=CT[tp];
-  sv();toast('✅ 署名を保存しました');renderDet();
+  sv(curCust);toast('✅ 署名を保存しました');renderDet();
 }
 function resetSgn(tp){
   if(!confirm('署名をリセットしますか？'))return;
   curCust['signed_'+tp]=false;
   delete curCust['sign_img_'+tp];
   delete curCust['sign_date_'+tp];
-  sv();renderDet();
+  sv(curCust);renderDet();
 }
 
 function renderKarte(){
@@ -832,6 +896,10 @@ function saveKarte(){
         curCust.records.unshift(rec);
       }
       
+      // 変更マーク（重要：syncFromCloudから守る）
+      curCust.updated_at = new Date().toISOString();
+      curCust._dirty = true;
+      
       // localStorageに保存（URLだけなので軽い）
       try {
         localStorage.setItem('cs', JSON.stringify(customers));
@@ -844,7 +912,7 @@ function saveKarte(){
         try { localStorage.setItem('cs', JSON.stringify(customers)); } catch(e){}
       }
       
-      // クラウド同期
+      // クラウド同期（_dirtyの顧客だけ送られる）
       if(typeof syncToCloud === 'function'){
         syncToCloud().catch(function(e){console.warn('cloud sync failed',e);});
       }
@@ -867,7 +935,13 @@ function saveKarte(){
       } else {
         curCust.records.unshift(rec);
       }
+      // 変更マーク
+      curCust.updated_at = new Date().toISOString();
+      curCust._dirty = true;
       try { localStorage.setItem('cs', JSON.stringify(customers)); } catch(e){}
+      if(typeof syncToCloud === 'function'){
+        syncToCloud().catch(function(e){console.warn('cloud sync failed',e);});
+      }
       toast('📝 テキストのみ保存しました');
       clearKarteDraft();
       window._editingRecordIdx = undefined;
@@ -1092,10 +1166,13 @@ function parseCSV(txt){
         if(!dup){
           ex.reservations.push({date:date,time:time,menu:menu,staff:staff,status:resStatus,bookingNum:bookingNum});
           updated++;
+          // 変更マーク
+          ex.updated_at = new Date().toISOString();
+          ex._dirty = true;
         }
         // 情報更新
-        if(phone && !ex.phone) ex.phone = phone;
-        if(kana && !ex.kana) ex.kana = kana;
+        if(phone && !ex.phone){ ex.phone = phone; ex.updated_at = new Date().toISOString(); ex._dirty = true; }
+        if(kana && !ex.kana){ ex.kana = kana; ex.updated_at = new Date().toISOString(); ex._dirty = true; }
       }
     }else{
       var nc={
@@ -1105,7 +1182,9 @@ function parseCSV(txt){
         phone: phone,
         reservations: date ? [{date:date,time:time,menu:menu,staff:staff,status:resStatus,bookingNum:bookingNum}] : [],
         records: [],
-        signed_exte:false, signed_perm:false, signed_wax:false
+        signed_exte:false, signed_perm:false, signed_wax:false,
+        updated_at: new Date().toISOString(),
+        _dirty: true
       };
       customers.push(nc);
       added++;

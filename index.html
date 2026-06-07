@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#FFE4D9;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#D7F0EA;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -287,7 +287,18 @@ function mergeRecords(a, b){
 }
 // ===== SUPABASE設定ここまで =====
 
-var staffList = JSON.parse(localStorage.getItem('sl')||'["佐藤","鈴木","田中"]');
+var staffList = JSON.parse(localStorage.getItem('sl')||'[]');
+// 既存スタッフリストから古いデフォルト（佐藤・鈴木・田中）を削除
+(function(){
+  var defaults = ['佐藤','鈴木','田中'];
+  var changed = false;
+  staffList = staffList.filter(function(s){
+    if(defaults.indexOf(s) >= 0){ changed = true; return false; }
+    return true;
+  });
+  if(changed) localStorage.setItem('sl', JSON.stringify(staffList));
+})();
+
 var customers = JSON.parse(localStorage.getItem('cs')||'[]');
 var curDate = new Date();
 var curStaff = 'all';
@@ -1364,7 +1375,7 @@ function resetAllData(){
   localStorage.removeItem('cs');
   localStorage.removeItem('sl');
   customers=[];
-  staffList=['佐藤','鈴木','田中'];
+  staffList=[];
   sv();svSt();
   renderList();
   renderStaff();

@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#D7F0EA;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#EDE0F5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -288,9 +288,9 @@ function mergeRecords(a, b){
 // ===== SUPABASE設定ここまで =====
 
 var staffList = JSON.parse(localStorage.getItem('sl')||'[]');
-// 既存スタッフリストから古いデフォルト（佐藤・鈴木・田中）を削除
+// 既存スタッフリストから古いデフォルト（佐藤・鈴木・田中、各種表記）を削除
 (function(){
-  var defaults = ['佐藤','鈴木','田中'];
+  var defaults = ['佐藤','鈴木','田中','サトウ','スズキ','タナカ','さとう','すずき','たなか'];
   var changed = false;
   staffList = staffList.filter(function(s){
     if(defaults.indexOf(s) >= 0){ changed = true; return false; }
@@ -393,8 +393,10 @@ function renderList(){
   var sf=document.getElementById('sf');
   // 当日の予約からスタッフ一覧も取得（staffListに追加）
   var staffSet = [];
+  var oldDefaults = ['佐藤','鈴木','田中','サトウ','スズキ','タナカ'];
   customers.forEach(function(c){
     (c.reservations||[]).forEach(function(r){
+      if(r.staff && oldDefaults.indexOf(r.staff)>=0) return; // 古いデフォルト名は除外
       if(r.staff && staffSet.indexOf(r.staff)<0) staffSet.push(r.staff);
       if(r.staff && staffList.indexOf(r.staff)<0){ staffList.push(r.staff); svSt(); }
     });
@@ -1202,9 +1204,11 @@ function parseCSV(txt){
     }
   });
 
-  // CSVから取得したスタッフ名をstaffListに自動追加
+  // CSVから取得したスタッフ名をstaffListに自動追加（古いデフォルト名は除外）
+  var oldDefaultsCSV = ['佐藤','鈴木','田中','サトウ','スズキ','タナカ'];
   customers.forEach(function(c){
     (c.reservations||[]).forEach(function(r){
+      if(r.staff && oldDefaultsCSV.indexOf(r.staff)>=0) return;
       if(r.staff && !staffList.includes(r.staff)){
         staffList.push(r.staff);
       }

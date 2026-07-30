@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#EDE0F5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#DFE6ED;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -192,12 +192,25 @@ async function syncToCloud() {
   if(dirties.length === 0) return;
   for(var i=0; i<dirties.length; i++) {
     var c = dirties[i];
-    // _dirtyフラグはクラウドに保存しないように一時退避
     var ts = c.updated_at || new Date().toISOString();
     c.updated_at = ts;
-    var dataCopy = {};
-    for(var k in c){ if(k !== '_dirty') dataCopy[k] = c[k]; }
     try {
+      // ★ 重要: プッシュ前に現在のクラウドデータを取得して記録をマージ
+      // これで他のiPadが書いたカルテを上書きしないようにする
+      try {
+        var existing = await supaFetch('GET', 'customers?id=eq.' + encodeURIComponent(c.id) + '&select=*');
+        if(existing && existing.length > 0 && existing[0].data){
+          var cloudRecords = existing[0].data.records || [];
+          var localRecords = c.records || [];
+          c.records = mergeRecords(localRecords, cloudRecords);
+        }
+      } catch(mergeErr){
+        console.warn('pre-push merge failed', mergeErr);
+        // マージ失敗してもプッシュは試みる
+      }
+      // _dirtyフラグはクラウドに保存しないように除外
+      var dataCopy = {};
+      for(var k in c){ if(k !== '_dirty') dataCopy[k] = c[k]; }
       await supaFetch('POST', 'customers', { id: c.id, data: dataCopy, updated_at: ts });
       delete c._dirty; // 成功したらフラグクリア
     } catch(e) {
@@ -234,18 +247,27 @@ async function syncFromCloud() {
           customers.push(nc);
           changed = true;
         } else {
-          // ローカルに未送信の変更がある場合は触らない（重要！）
+          // ★ records は _dirty かどうかに関わらず常にマージ
+          // これで他のiPadで書いたカルテが必ず反映される
+          var localRecs = local.records || [];
+          var cloudRecs = (row.data.records) || [];
+          var mergedRecs = mergeRecords(localRecs, cloudRecs);
+          if(mergedRecs.length !== localRecs.length){
+            local.records = mergedRecs;
+            changed = true;
+          }
+          
+          // _dirty (ローカル編集中) の場合は他フィールドは触らない
           if(local._dirty) return;
+          
           var cloudTime = new Date(row.updated_at).getTime();
           var localTime = new Date(local.updated_at || 0).getTime();
           if(cloudTime > localTime) {
-            // クラウドの方が新しい → 上書き
-            // recordsはマージ（両方の記録を保持）
-            var localRecs = local.records || [];
-            var cloudRecs = (row.data.records) || [];
-            var mergedRecs = mergeRecords(localRecs, cloudRecs);
-            Object.assign(local, row.data);
-            local.records = mergedRecs;
+            // クラウドの方が新しい → 他フィールドを反映
+            Object.keys(row.data).forEach(function(k){
+              if(k !== 'records') local[k] = row.data[k];
+            });
+            local.records = mergedRecs; // マージ結果を確実に反映
             local.updated_at = row.updated_at;
             changed = true;
           }
@@ -903,6 +925,9 @@ function saveKarte(){
       
       if(!curCust.records)curCust.records=[];
       if(window._editingRecordIdx !== undefined && window._editingRecordIdx >= 0){
+        // 編集時は元のatタイムスタンプを維持（複数iPad同期の重複防止）
+        var origRec = curCust.records[window._editingRecordIdx];
+        if(origRec && origRec.at) rec.at = origRec.at;
         curCust.records[window._editingRecordIdx] = rec;
         window._editingRecordIdx = undefined;
       } else {
@@ -943,6 +968,9 @@ function saveKarte(){
       rec.karte_img = '';
       if(!curCust.records)curCust.records=[];
       if(window._editingRecordIdx !== undefined && window._editingRecordIdx >= 0){
+        // 編集時は元のatタイムスタンプを維持（複数iPad同期の重複防止）
+        var origRec = curCust.records[window._editingRecordIdx];
+        if(origRec && origRec.at) rec.at = origRec.at;
         curCust.records[window._editingRecordIdx] = rec;
         window._editingRecordIdx = undefined;
       } else {

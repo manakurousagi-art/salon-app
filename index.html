@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#FFE5D0;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FFF7CC;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -185,41 +185,55 @@ async function supaFetch(method, path, body) {
   return res.ok;
 }
 
+var _syncing = false;
 async function syncToCloud() {
-  // 変更があった顧客（_dirty=true）だけプッシュする
-  var dirties = customers.filter(function(c){ return c._dirty; });
-  if(dirties.length === 0) return;
-  for(var i=0; i<dirties.length; i++) {
-    var c = dirties[i];
-    var ts = c.updated_at || new Date().toISOString();
-    c.updated_at = ts;
-    try {
-      // ★ 重要: プッシュ前に現在のクラウドデータを取得して記録をマージ
-      // これで他のiPadが書いたカルテを上書きしないようにする
+  // 同時実行を防ぐ（race condition防止）
+  if(_syncing){
+    // すでに同期中なら、少し後にリトライ
+    return;
+  }
+  _syncing = true;
+  try {
+    // 変更があった顧客（_dirty=true）だけプッシュする
+    var dirties = customers.filter(function(c){ return c._dirty; });
+    if(dirties.length === 0) return;
+    for(var i=0; i<dirties.length; i++) {
+      var c = dirties[i];
+      var ts = c.updated_at || new Date().toISOString();
+      c.updated_at = ts;
       try {
-        var existing = await supaFetch('GET', 'customers?id=eq.' + encodeURIComponent(c.id) + '&select=*');
-        if(existing && existing.length > 0 && existing[0].data){
-          var cloudRecords = existing[0].data.records || [];
-          var localRecords = c.records || [];
-          c.records = mergeRecords(localRecords, cloudRecords);
+        // ★ プッシュ前に現在のクラウドデータを取得して記録をマージ
+        try {
+          var existing = await supaFetch('GET', 'customers?id=eq.' + encodeURIComponent(c.id) + '&select=*');
+          if(existing && existing.length > 0 && existing[0].data){
+            var cloudRecords = existing[0].data.records || [];
+            var localRecords = c.records || [];
+            c.records = mergeRecords(localRecords, cloudRecords);
+          }
+        } catch(mergeErr){
+          console.warn('pre-push merge failed', mergeErr);
         }
-      } catch(mergeErr){
-        console.warn('pre-push merge failed', mergeErr);
-        // マージ失敗してもプッシュは試みる
+        var dataCopy = {};
+        for(var k in c){ if(k !== '_dirty') dataCopy[k] = c[k]; }
+        // deep clone recordsで参照問題を防ぐ
+        dataCopy.records = JSON.parse(JSON.stringify(c.records || []));
+        await supaFetch('POST', 'customers', { id: c.id, data: dataCopy, updated_at: ts });
+        delete c._dirty;
+      } catch(e) {
+        console.warn('push failed for', c.id, e);
       }
-      // _dirtyフラグはクラウドに保存しないように除外
-      var dataCopy = {};
-      for(var k in c){ if(k !== '_dirty') dataCopy[k] = c[k]; }
-      await supaFetch('POST', 'customers', { id: c.id, data: dataCopy, updated_at: ts });
-      delete c._dirty; // 成功したらフラグクリア
-    } catch(e) {
-      console.warn('push failed for', c.id, e);
-      // _dirty残してリトライ可能に
+    }
+    localStorage.setItem('cs', JSON.stringify(customers));
+    console.log('Synced to cloud:', dirties.length, 'customers');
+  } finally {
+    _syncing = false;
+    // 同期中に発生した新しい変更があれば、少し後に再度同期
+    if(customers.some(function(c){ return c._dirty; })){
+      setTimeout(function(){
+        syncToCloud().catch(function(e){console.warn('resync failed',e);});
+      }, 500);
     }
   }
-  // _dirtyクリア後の状態を保存
-  localStorage.setItem('cs', JSON.stringify(customers));
-  console.log('Synced to cloud:', dirties.length, 'customers');
 }
 
 // 全件強制プッシュ（手動同期ボタン用）
@@ -232,6 +246,11 @@ async function pushAllToCloud() {
 }
 
 async function syncFromCloud() {
+  // syncToCloud実行中は避ける（race condition防止）
+  if(_syncing){
+    console.log('sync skip: syncToCloud running');
+    return;
+  }
   try {
     var rows = await supaFetch('GET', 'customers?select=*&order=updated_at.desc');
     if(rows && rows.length > 0) {

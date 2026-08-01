@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#FFF7CC;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#D4E9F7;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -141,6 +141,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
         <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#C0392B;background:#FFF5F5;border-bottom:1px solid #FFD0D0">🗑️ データリセット</div><div style="padding:12px 14px">
           <div style="font-size:12px;color:var(--txt-s);margin-bottom:8px">保存容量を確認できます</div>
           <button class="btn bs bb2" onclick="checkStorage()">📊 保存容量を確認</button>
+          <button class="btn bs bb2" style="margin-top:8px" onclick="mergeDuplicates()">🔀 重複顧客を統合</button>
           <div style="font-size:13px;color:var(--txt-s);margin-bottom:12px">お客様データ・予約データ・スタッフ設定を全て削除します。CSVを再取込みする前にご利用ください。</div>
           <button class="btn bd bb2" onclick="resetAllData()">⚠️ 全データをリセットする</button>
         </div></div>
@@ -1195,21 +1196,19 @@ function parseCSV(txt){
     if(!ex && phone){
       ex = customers.find(function(c){ return c.phone && c.phone===phone; });
     }
-    // 名前で検索（ただし、CSV側に電話番号がある場合は別人として扱う）
+    // 名前で検索（ただし、両方に電話番号があって違う場合のみ別人扱い）
     if(!ex && name){
       var nameNorm = name.replace(/[\s\u3000]/g,'');
       var kanaNorm = kana.replace(/[\s\u3000]/g,'');
       ex = customers.find(function(c){
         var cn = (c.name||'').replace(/[\s\u3000]/g,'');
         var ck = (c.kana||'').replace(/[\s\u3000]/g,'');
-        // 名前一致 かつ
-        // CSV側に電話番号がない（電話予約） かつ
-        // 既存顧客にも電話番号がない、または同じ電話番号
+        // 名前一致
         var nameMatch = cn===nameNorm && (ck===kanaNorm || !kanaNorm || !ck);
         if(!nameMatch) return false;
-        // 電話番号で同姓同名を区別
-        if(phone && c.phone && c.phone !== phone) return false; // 別人
-        if(phone && !c.phone) return false; // 既存に電話番号がないのにCSVにある→別人の可能性
+        // 両方に電話番号があって、かつ違う場合のみ別人扱い
+        if(phone && c.phone && c.phone !== phone) return false;
+        // それ以外（片方だけ電話ありなど）は同じ人扱い
         return true;
       });
     }
@@ -1340,6 +1339,73 @@ function addStaff(){
   staffList.push(n);svSt();inp.value='';renderStaff();toast('スタッフを追加しました');
 }
 function rmStaff(i){staffList.splice(i,1);svSt();renderStaff();}
+
+function mergeDuplicates(){
+  // 同名（スペース無視）の顧客をグループ化
+  var groups = {};
+  customers.forEach(function(c){
+    var key = (c.name||'').replace(/[\s\u3000]/g,'') + '|' + (c.kana||'').replace(/[\s\u3000]/g,'');
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(c);
+  });
+  var dupGroups = Object.keys(groups).filter(function(k){ return groups[k].length > 1; });
+  if(dupGroups.length === 0){
+    alert('重複する顧客はありません。');
+    return;
+  }
+  var msg = '同名の顧客が' + dupGroups.length + '組あります。\n\n';
+  dupGroups.slice(0,5).forEach(function(k){
+    var g = groups[k];
+    msg += '・' + g[0].name + '（' + g.length + '件）\n';
+  });
+  if(dupGroups.length > 5) msg += '...他 ' + (dupGroups.length-5) + '組\n';
+  msg += '\n重複を1件に統合しますか？\n（記録・予約・電話番号は全て残ります）';
+  if(!confirm(msg)) return;
+  
+  var mergedCount = 0;
+  dupGroups.forEach(function(k){
+    var g = groups[k];
+    // 最古の顧客をマスターにする（最も長い履歴を持つ可能性）
+    var master = g[0];
+    for(var i=1; i<g.length; i++){
+      var dup = g[i];
+      // 記録をマージ
+      master.records = mergeRecords(master.records || [], dup.records || []);
+      // 予約をマージ（重複除去）
+      var existingBnums = (master.reservations||[]).map(function(r){return r.bookingNum;}).filter(Boolean);
+      (dup.reservations||[]).forEach(function(r){
+        if(r.bookingNum && existingBnums.indexOf(r.bookingNum) >= 0) return;
+        // 日付+時間+スタッフでも重複チェック
+        var isDup = (master.reservations||[]).some(function(mr){
+          return mr.date===r.date && mr.time===r.time && mr.staff===r.staff;
+        });
+        if(!isDup){
+          if(!master.reservations) master.reservations = [];
+          master.reservations.push(r);
+        }
+      });
+      // 空欄のフィールドを埋める
+      if(!master.phone && dup.phone) master.phone = dup.phone;
+      if(!master.kana && dup.kana) master.kana = dup.kana;
+      // カウンセリング情報も欠けてれば埋める
+      ['counsel','signed_exte','signed_perm','signed_wax','sign_img_exte','sign_img_perm','sign_img_wax',
+       'sign_date_exte','sign_date_perm','sign_date_wax','sign_text_exte','sign_text_perm','sign_text_wax'].forEach(function(f){
+        if(dup[f] && !master[f]) master[f] = dup[f];
+      });
+      // 重複顧客を削除
+      var idx = customers.indexOf(dup);
+      if(idx >= 0) customers.splice(idx, 1);
+      mergedCount++;
+    }
+    master.updated_at = new Date().toISOString();
+    master._dirty = true;
+  });
+  
+  localStorage.setItem('cs', JSON.stringify(customers));
+  syncToCloud().catch(function(e){console.warn(e);});
+  renderList();
+  alert('✅ ' + mergedCount + '件の重複を統合しました。');
+}
 
 function checkStorage(){
   var total = 0;

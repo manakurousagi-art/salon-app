@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#F5DDE5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#D6EEF5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -143,6 +143,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
           <button class="btn bs bb2" onclick="checkStorage()">📊 保存容量を確認</button>
           <button class="btn bp bb2" style="margin-top:8px" onclick="migrateOldImages()">☁️ 古い画像をクラウドに移行して容量確保</button>
           <button class="btn bs bb2" style="margin-top:8px" onclick="mergeDuplicates()">🔀 重複顧客を統合</button>
+          <div style="border-top:1px solid var(--bdr);margin-top:12px;padding-top:12px">
+          <div style="font-size:12px;color:#C0392B;font-weight:700;margin-bottom:8px">💾 バックアップ（定期的に実行してください）</div>
+          <button class="btn bp bb2" onclick="exportBackup()">💾 バックアップをファイルに保存</button>
+          <label class="btn bs bb2" style="margin-top:8px;display:block;text-align:center;cursor:pointer">📂 バックアップから復元<input type="file" accept=".json" style="display:none" onchange="importBackup(this)"></label>
+          <button class="btn bd bb2" style="margin-top:8px" onclick="cleanOldImages()">🆘 緊急：画像を消して容量確保（先にバックアップ！）</button>
+          </div>
           <div style="font-size:13px;color:var(--txt-s);margin-bottom:12px">お客様データ・予約データ・スタッフ設定を全て削除します。CSVを再取込みする前にご利用ください。</div>
           <button class="btn bd bb2" onclick="resetAllData()">⚠️ 全データをリセットする</button>
         </div></div>
@@ -384,7 +390,14 @@ var staffList = JSON.parse(localStorage.getItem('sl')||'[]');
 })();
 
 var customers = JSON.parse(localStorage.getItem('cs')||'[]');
-var curDate = new Date();
+var curDate = (function(){
+  var saved = localStorage.getItem('lastViewDate');
+  if(saved){
+    var parts = saved.split('-');
+    if(parts.length===3) return new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
+  }
+  return new Date();
+})();
 var curStaff = 'all';
 var curCust = null;
 var curDTab = 'basic';
@@ -472,6 +485,7 @@ function goToday(){curDate=new Date();renderList();}
 function setStaff(s){curStaff=s;renderList();}
 
 function renderList(){
+  localStorage.setItem('lastViewDate', fmt(curDate));
   var dlTxt=document.getElementById('dlabel-date')||document.getElementById('dlabel');if(dlTxt)dlTxt.textContent=fmtD(curDate);var _di=document.getElementById('date-input');if(_di)_di.value=fmt(curDate);
   var ds=fmt(curDate);
   var sf=document.getElementById('sf');
@@ -1528,6 +1542,111 @@ async function mergeDuplicates(){
   
   renderList();
   alert('✅ ' + mergedCount + '件の重複を統合しました。\nクラウドからも削除しました。');
+}
+
+// ===== バックアップ / 復元 =====
+function exportBackup(){
+  try {
+    var data = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      customers: customers,
+      staffList: staffList
+    };
+    var json = JSON.stringify(data);
+    var blob = new Blob([json], {type:'application/json'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    var d = new Date();
+    var fname = 'karte_backup_' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + '.json';
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 1000);
+    toast('💾 バックアップを保存しました（' + customers.length + '人）');
+  } catch(e){
+    alert('バックアップ失敗: ' + e.message);
+  }
+}
+
+function importBackup(inp){
+  var f = inp.files[0];
+  if(!f) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try {
+      var data = JSON.parse(e.target.result);
+      if(!data.customers || !Array.isArray(data.customers)){
+        alert('バックアップファイルの形式が正しくありません。');
+        return;
+      }
+      var msg = 'バックアップを復元します。\n\n';
+      msg += '保存日時: ' + (data.exportedAt||'不明') + '\n';
+      msg += 'バックアップの顧客数: ' + data.customers.length + '人\n';
+      msg += '現在の顧客数: ' + customers.length + '人\n\n';
+      msg += '【マージ方式】現在のデータと合体します。\n';
+      msg += '（どちらのカルテも残ります）\n\n続行しますか？';
+      if(!confirm(msg)) return;
+      
+      var added = 0, merged = 0;
+      data.customers.forEach(function(bc){
+        var local = customers.find(function(c){ return c.id === bc.id; });
+        if(!local){
+          // IDで見つからなければ名前でも探す
+          var nameNorm = (bc.name||'').replace(/[\s\u3000]/g,'');
+          local = customers.find(function(c){
+            return (c.name||'').replace(/[\s\u3000]/g,'') === nameNorm && nameNorm;
+          });
+        }
+        if(!local){
+          customers.push(bc);
+          added++;
+        } else {
+          // 記録をマージ
+          local.records = mergeRecords(local.records||[], bc.records||[]);
+          // 予約をマージ
+          if(!local.reservations) local.reservations = [];
+          (bc.reservations||[]).forEach(function(r){
+            var dup = local.reservations.some(function(lr){
+              return (r.bookingNum && lr.bookingNum===r.bookingNum) ||
+                     (lr.date===r.date && lr.time===r.time && lr.staff===r.staff);
+            });
+            if(!dup) local.reservations.push(r);
+          });
+          // 空欄を埋める
+          if(!local.phone && bc.phone) local.phone = bc.phone;
+          if(!local.kana && bc.kana) local.kana = bc.kana;
+          ['counsel','signed_exte','signed_perm','signed_wax','sign_img_exte','sign_img_perm','sign_img_wax',
+           'sign_date_exte','sign_date_perm','sign_date_wax','sign_text_exte','sign_text_perm','sign_text_wax'].forEach(function(f){
+            if(bc[f] && !local[f]) local[f] = bc[f];
+          });
+          merged++;
+        }
+      });
+      // スタッフも復元
+      if(data.staffList && Array.isArray(data.staffList)){
+        data.staffList.forEach(function(s){
+          if(s && staffList.indexOf(s)<0) staffList.push(s);
+        });
+        svSt();
+      }
+      try {
+        localStorage.setItem('cs', JSON.stringify(customers));
+        renderList();
+        alert('✅ 復元完了\n\n新規追加: ' + added + '人\nマージ: ' + merged + '人\n合計: ' + customers.length + '人');
+      } catch(quotaErr){
+        alert('⚠️ 復元したデータが多すぎて保存できません。\n\n先に「古い画像をクラウドに移行」で容量を空けてください。\n（画面上のデータは復元されていますが、まだ保存されていません）');
+      }
+    } catch(err){
+      alert('復元失敗: ' + err.message);
+    }
+    inp.value = '';
+  };
+  reader.readAsText(f);
 }
 
 function checkStorage(){

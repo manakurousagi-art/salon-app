@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#D6EEF5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#E4DCF5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -138,7 +138,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
           <div id="staff-disp"></div>
           <div style="display:flex;gap:8px;margin-top:10px"><input class="fi" id="ns" placeholder="スタッフ名を追加" style="flex:1"><button class="btn bp bsm" onclick="addStaff()">追加</button></div>
         </div></div>
-        <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#C0392B;background:#FFF5F5;border-bottom:1px solid #FFD0D0">🗑️ データリセット</div><div style="padding:12px 14px">
+        <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#C0392B;background:#FFF5F5;border-bottom:1px solid #FFD0D0">🛡️ データ管理・バックアップ</div><div style="padding:12px 14px">
           <div style="font-size:12px;color:var(--txt-s);margin-bottom:8px">保存容量を確認できます</div>
           <button class="btn bs bb2" onclick="checkStorage()">📊 保存容量を確認</button>
           <button class="btn bp bb2" style="margin-top:8px" onclick="migrateOldImages()">☁️ 古い画像をクラウドに移行して容量確保</button>
@@ -149,8 +149,6 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
           <label class="btn bs bb2" style="margin-top:8px;display:block;text-align:center;cursor:pointer">📂 バックアップから復元<input type="file" accept=".json" style="display:none" onchange="importBackup(this)"></label>
           <button class="btn bd bb2" style="margin-top:8px" onclick="cleanOldImages()">🆘 緊急：画像を消して容量確保（先にバックアップ！）</button>
           </div>
-          <div style="font-size:13px;color:var(--txt-s);margin-bottom:12px">お客様データ・予約データ・スタッフ設定を全て削除します。CSVを再取込みする前にご利用ください。</div>
-          <button class="btn bd bb2" onclick="resetAllData()">⚠️ 全データをリセットする</button>
         </div></div>
       </div>
     </div>
@@ -226,22 +224,42 @@ async function syncToCloud() {
       var ts = c.updated_at || new Date().toISOString();
       c.updated_at = ts;
       try {
-        // ★ 60秒以内に同期済みでなければ、プッシュ前にクラウドから最新記録を取得してマージ
-        if(!recentlySync){
-          try {
-            var existing = await supaFetch('GET', 'customers?id=eq.' + encodeURIComponent(c.id) + '&select=data');
-            if(existing && existing.length > 0 && existing[0].data){
-              var cloudRecords = existing[0].data.records || [];
-              var localRecords = c.records || [];
-              c.records = mergeRecords(localRecords, cloudRecords);
-            }
-          } catch(mergeErr){
-            console.warn('pre-push merge failed', mergeErr);
+        // ★ プッシュ前にクラウドの最新を取得して、消してはいけないものを守る
+        var cloudData = null;
+        try {
+          var existing = await supaFetch('GET', 'customers?id=eq.' + encodeURIComponent(c.id) + '&select=data');
+          if(existing && existing.length > 0 && existing[0].data){
+            cloudData = existing[0].data;
+            // 施術記録はマージ（両方残す）
+            c.records = mergeRecords(c.records || [], cloudData.records || []);
           }
+        } catch(mergeErr){
+          console.warn('pre-push merge failed', mergeErr);
         }
         var dataCopy = {};
         for(var k in c){ if(k !== '_dirty') dataCopy[k] = c[k]; }
         dataCopy.records = JSON.parse(JSON.stringify(c.records || []));
+        // ★ ローカルが空でクラウドに値があるものは、クラウドの値を保持（画像消失防止）
+        if(cloudData){
+          Object.keys(cloudData).forEach(function(k){
+            if(k === 'records') return;
+            var lv = dataCopy[k], cv = cloudData[k];
+            if((lv === '' || lv === undefined || lv === null) && cv !== '' && cv !== undefined && cv !== null){
+              dataCopy[k] = cv;
+            }
+          });
+          // 記録内の画像も、ローカルが空ならクラウドの画像を復活
+          var cloudRecMap = {};
+          (cloudData.records || []).forEach(function(r){
+            var key = r.at || (r.date + '_' + r.staff + '_' + r.menu);
+            cloudRecMap[key] = r;
+          });
+          dataCopy.records.forEach(function(r){
+            var key = r.at || (r.date + '_' + r.staff + '_' + r.menu);
+            var cr = cloudRecMap[key];
+            if(cr && !r.karte_img && cr.karte_img) r.karte_img = cr.karte_img;
+          });
+        }
         await supaFetch('POST', 'customers', { id: c.id, data: dataCopy, updated_at: ts });
         delete c._dirty;
       } catch(e) {
@@ -267,6 +285,10 @@ async function syncToCloud() {
 
 // 全件強制プッシュ（手動同期ボタン用）
 async function pushAllToCloud() {
+  var msg = '現在このiPadにある ' + customers.length + '人分 のデータをクラウドに送信します。\n\n';
+  msg += 'クラウド側の記録とは合体されるので消えることはありませんが、\n';
+  msg += 'データ件数が少ないiPadで実行すると時間がかかります。\n\n実行しますか？';
+  if(!confirm(msg)) return;
   customers.forEach(function(c){
     if(!c.updated_at) c.updated_at = new Date().toISOString();
     c._dirty = true;
@@ -317,8 +339,12 @@ async function syncFromCloud() {
           var localTime = new Date(local.updated_at || 0).getTime();
           if(cloudTime > localTime) {
             // クラウドの方が新しい → 他フィールドを反映
+            // ただしクラウドが空でローカルに値があるものは消さない（画像消失防止）
             Object.keys(row.data).forEach(function(k){
-              if(k !== 'records') local[k] = row.data[k];
+              if(k === 'records') return;
+              var cv = row.data[k];
+              if((cv === '' || cv === undefined || cv === null) && local[k]) return;
+              local[k] = cv;
             });
             local.records = mergedRecs; // マージ結果を確実に反映
             local.updated_at = row.updated_at;
@@ -359,11 +385,20 @@ async function syncFromCloud() {
 function mergeRecords(a, b){
   var seen = {};
   var result = [];
+  function keyOf(r){ return r.at || (r.date + '_' + r.staff + '_' + r.menu); }
   function add(r){
-    var key = r.at || (r.date + '_' + r.staff + '_' + r.menu);
+    var key = keyOf(r);
     if(!seen[key]){
-      seen[key] = true;
+      seen[key] = r;
       result.push(r);
+    } else {
+      // 同じ記録が両方にある場合：画像を持っている方を優先（画像消失防止）
+      var ex = seen[key];
+      if(!ex.karte_img && r.karte_img) ex.karte_img = r.karte_img;
+      // メモが空なら埋める
+      ['memo_r','memo_l','note','menu','staff'].forEach(function(f){
+        if(!ex[f] && r[f]) ex[f] = r[f];
+      });
     }
   }
   (a || []).forEach(add);
@@ -408,13 +443,45 @@ var kartePenColor='#1a1a1a',kartePenSize=3,karteEraser=false,karteHistory=[];
 
 function fmt(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function fmtD(d){var days=['日','月','火','水','木','金','土'];return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日（'+days[d.getDay()]+'）';}
+// ===== 保存の共通処理（失敗したら必ず警告する） =====
+var _saveWarned = false;
+function saveLocal(){
+  try {
+    localStorage.setItem('cs',JSON.stringify(customers));
+    _saveWarned = false;
+    return true;
+  } catch(e){
+    console.error('SAVE FAILED', e);
+    showSaveError();
+    return false;
+  }
+}
+function showSaveError(){
+  if(_saveWarned) return; // 連続表示を防ぐ
+  _saveWarned = true;
+  var d = document.getElementById('save-err');
+  if(!d){
+    d = document.createElement('div');
+    d.id = 'save-err';
+    d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#C0392B;color:#fff;padding:12px 14px;z-index:99999;font-size:14px;font-weight:700;line-height:1.5;text-align:center';
+    d.innerHTML = '🚨 保存できませんでした（容量オーバー）<br><span style="font-weight:400;font-size:12px">「💾 バックアップをファイルに保存」→「🆘 緊急：画像を消して容量確保」を実行してください</span>';
+    document.body.appendChild(d);
+  }
+  d.style.display = 'block';
+}
+function hideSaveError(){
+  var d = document.getElementById('save-err');
+  if(d) d.style.display = 'none';
+  _saveWarned = false;
+}
+
 function sv(customer){
   // customer引数があれば、その顧客を変更マーク
   if(customer){
     customer.updated_at = new Date().toISOString();
     customer._dirty = true;
   }
-  localStorage.setItem('cs',JSON.stringify(customers));
+  saveLocal();
   // バックグラウンドでクラウドに保存（_dirtyの顧客だけ）
   syncToCloud().catch(function(e){console.warn('cloud sync failed',e);});
 }
@@ -953,7 +1020,7 @@ async function migrateOldImages(){
       if(i % 10 === 0){
         toast('☁️ 移行中... ' + (i+1) + '/' + toMigrate.length);
         // 途中経過をlocalStorageに保存
-        try { localStorage.setItem('cs', JSON.stringify(customers)); } catch(e){}
+        saveLocal();
       }
     } catch(e){
       console.warn('migrate failed', e);
@@ -1084,7 +1151,7 @@ function saveKarte(){
           var k = localStorage.key(i);
           if(k && k.indexOf('karteDraft_')===0) localStorage.removeItem(k);
         }
-        try { localStorage.setItem('cs', JSON.stringify(customers)); } catch(e){}
+        saveLocal();
       }
       
       // クラウド同期（_dirtyの顧客だけ送られる）
@@ -1117,7 +1184,7 @@ function saveKarte(){
       // 変更マーク
       curCust.updated_at = new Date().toISOString();
       curCust._dirty = true;
-      try { localStorage.setItem('cs', JSON.stringify(customers)); } catch(e){}
+      saveLocal();
       if(typeof syncToCloud === 'function'){
         syncToCloud().catch(function(e){console.warn('cloud sync failed',e);});
       }
@@ -1729,18 +1796,28 @@ function cleanOldImages(){
 }
 
 function resetAllData(){
-  if(!confirm('全データ（お客様・予約・スタッフ設定）をリセットしますか？\nこの操作は元に戻せません。')){return;}
-  localStorage.removeItem('cs');
-  localStorage.removeItem('sl');
-  customers=[];
-  staffList=[];
-  sv();svSt();
-  renderList();
-  renderStaff();
-  toast('✅ データをリセットしました');
+  // 安全のため無効化しました（誤操作による全データ消失を防ぐため）
+  alert('この機能は安全のため無効になっています。');
 }
 
 renderList();
+// 起動時に保存容量をチェック（80%超で警告バナー）
+setTimeout(function(){
+  try {
+    var total = 0;
+    for(var k in localStorage){
+      if(localStorage.hasOwnProperty(k)) total += (localStorage[k].length + k.length) * 2;
+    }
+    var pct = total / (5*1024*1024) * 100;
+    if(pct >= 80){
+      var d = document.createElement('div');
+      d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:'+(pct>=95?'#C0392B':'#E67E22')+';color:#fff;padding:10px 30px 10px 14px;z-index:99998;font-size:13px;font-weight:700;text-align:center;line-height:1.5';
+      d.innerHTML = '⚠️ 保存容量 '+pct.toFixed(0)+'% 使用中<br><span style="font-weight:400;font-size:11px">「💾 バックアップ」→「☁️ 古い画像をクラウドに移行」で空きを作ってください</span>'
+        +'<span onclick="this.parentNode.style.display=\'none\'" style="position:absolute;right:12px;top:8px;font-size:18px;cursor:pointer">×</span>';
+      document.body.appendChild(d);
+    }
+  } catch(e){}
+}, 2500);
 // 起動時にクラウドから自動取得
 setTimeout(function(){
   syncFromCloud().catch(function(e){console.warn('auto sync failed',e);});

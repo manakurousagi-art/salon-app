@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>アイラッシュ電子カルテ</title>
 <style>
-:root{--bg:#E4DCF5;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
+:root{--bg:#FDEBD3;--card:#FFF;--pri:#C4957A;--pri-l:#F5EDE8;--pri-d:#A07860;--acc:#7BAF9E;--acc-l:#E8F4F1;--txt:#2D2926;--txt-s:#7A6E68;--bdr:#E8DDD8;--r:12px;}
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;color:var(--txt);}
 #app{display:flex;flex-direction:column;height:100vh;height:100dvh;}
@@ -141,7 +141,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);font-family:'Hiragino
         <div class="card"><div style="padding:12px 14px;font-size:13px;font-weight:700;color:#C0392B;background:#FFF5F5;border-bottom:1px solid #FFD0D0">🛡️ データ管理・バックアップ</div><div style="padding:12px 14px">
           <div style="font-size:12px;color:var(--txt-s);margin-bottom:8px">保存容量を確認できます</div>
           <button class="btn bs bb2" onclick="checkStorage()">📊 保存容量を確認</button>
-          <button class="btn bp bb2" style="margin-top:8px" onclick="migrateOldImages()">☁️ 古い画像をクラウドに移行して容量確保</button>
+          <button class="btn bp bb2" style="margin-top:8px" onclick="migrateOldImages()">☁️ 画像をクラウドに移して容量を空ける</button>
           <button class="btn bs bb2" style="margin-top:8px" onclick="mergeDuplicates()">🔀 重複顧客を統合</button>
           <div style="border-top:1px solid var(--bdr);margin-top:12px;padding-top:12px">
           <div style="font-size:12px;color:#C0392B;font-weight:700;margin-bottom:8px">💾 バックアップ（定期的に実行してください）</div>
@@ -697,7 +697,8 @@ function saveKarteDraft(){
     memo_l: kml?kml.value:'',
     note: knt?knt.value:'',
     canvas: canvasData,
-    editingIdx: window._editingRecordIdx
+    editingIdx: window._editingRecordIdx,
+    savedAt: Date.now()
   };
   try { 
     localStorage.setItem('karteDraft_'+curCust.id, JSON.stringify(draft));
@@ -858,11 +859,29 @@ function saveSig(tp){
   var c=document.getElementById('sig-c');if(!c)return;
   var now=new Date();
   var ds=now.getFullYear()+'/'+(now.getMonth()+1)+'/'+now.getDate()+' '+now.getHours()+':'+String(now.getMinutes()).padStart(2,'0');
-  curCust['signed_'+tp]=true;
-  curCust['sign_img_'+tp]=c.toDataURL('image/png');
-  curCust['sign_date_'+tp]=ds;
-  curCust['sign_text_'+tp]=CT[tp];
-  sv(curCust);toast('✅ 署名を保存しました');renderDet();
+  // 白背景に合成して軽量JPEGにする（透明PNGは容量が大きいため）
+  var maxW=600, scale=c.width>maxW?maxW/c.width:1;
+  var tmp=document.createElement('canvas');
+  tmp.width=Math.round(c.width*scale); tmp.height=Math.round(c.height*scale);
+  var tc=tmp.getContext('2d');
+  tc.fillStyle='#fff'; tc.fillRect(0,0,tmp.width,tmp.height);
+  tc.drawImage(c,0,0,tmp.width,tmp.height);
+  var dataUrl=tmp.toDataURL('image/jpeg',0.7);
+  var cust=curCust;
+  cust['signed_'+tp]=true;
+  cust['sign_date_'+tp]=ds;
+  cust['sign_text_'+tp]=CT[tp];
+  toast('☁️ 署名を保存中...');
+  uploadKarteImage(dataUrl, cust.id+'_sig_'+tp).then(function(url){
+    cust['sign_img_'+tp]=url;
+    sv(cust);toast('✅ 署名を保存しました');
+    if(curCust===cust) renderDet();
+  }).catch(function(e){
+    console.warn('sig upload failed',e);
+    cust['sign_img_'+tp]=dataUrl; // 通信できない時は端末に軽量版を保存
+    sv(cust);toast('✅ 署名を保存しました（端末内）');
+    if(curCust===cust) renderDet();
+  });
 }
 function resetSgn(tp){
   if(!confirm('署名をリセットしますか？'))return;
@@ -984,42 +1003,67 @@ function clrKarte(){
 // ===== Storage画像アップロード =====
 // 古いbase64画像をSupabase Storageに移行してlocalStorageを節約
 async function migrateOldImages(){
-  // base64画像を持つ記録を検出
-  var toMigrate = [];
+  // 端末内にある画像（カルテ・署名）を探す
+  var items = [];
   customers.forEach(function(c){
-    (c.records||[]).forEach(function(r, idx){
-      if(r.karte_img && r.karte_img.indexOf('data:image') === 0){
-        toMigrate.push({customer: c, record: r, idx: idx});
+    (c.records||[]).forEach(function(r){
+      if(r.karte_img && String(r.karte_img).indexOf('data:image') === 0){
+        items.push({customer:c, kind:'karte', rec:r});
+      }
+    });
+    ['exte','perm','wax'].forEach(function(tp){
+      var f = 'sign_img_'+tp;
+      if(c[f] && String(c[f]).indexOf('data:image') === 0){
+        items.push({customer:c, kind:'sig', field:f, tp:tp});
       }
     });
   });
-  
-  if(toMigrate.length === 0){
-    alert('移行が必要な古い画像はありません。');
+
+  // 古い下書き（2日以上前 or 日時不明）を数える
+  var draftKeys = [];
+  var nowMs = Date.now();
+  for(var i=0; i<localStorage.length; i++){
+    var k = localStorage.key(i);
+    if(k && k.indexOf('karteDraft_')===0){
+      var old = true;
+      try { var d = JSON.parse(localStorage.getItem(k)); if(d && d.savedAt && (nowMs - d.savedAt) < 2*86400000) old = false; } catch(e){}
+      if(curCust && k === 'karteDraft_'+curCust.id) old = false; // 今開いてる人は残す
+      if(old) draftKeys.push(k);
+    }
+  }
+
+  if(items.length === 0 && draftKeys.length === 0){
+    alert('移行が必要な画像はありません。');
     return;
   }
-  
-  var msg = '古い形式の画像 ' + toMigrate.length + '枚 をクラウドに移行します。\n\n';
-  msg += 'これで iPad の保存容量が大幅に空きます。\n';
-  msg += '（数分かかる場合があります）\n\n続行しますか？';
+
+  var nK = items.filter(function(x){return x.kind==='karte';}).length;
+  var nS = items.filter(function(x){return x.kind==='sig';}).length;
+  var msg = '以下を整理して容量を空けます。\n\n';
+  if(nK) msg += '・カルテ画像 ' + nK + '枚 → クラウドへ移動\n';
+  if(nS) msg += '・署名画像 ' + nS + '枚 → クラウドへ移動\n';
+  if(draftKeys.length) msg += '・2日以上前の書きかけ下書き ' + draftKeys.length + '件 → 削除\n';
+  msg += '\n画像は消えません（保管場所が変わるだけ）。\n数分かかることがあります。続行しますか？';
   if(!confirm(msg)) return;
-  
-  var success = 0;
-  var failed = 0;
+
+  // 下書き削除
+  draftKeys.forEach(function(k){ localStorage.removeItem(k); });
+
+  var success = 0, failed = 0;
   toast('☁️ 移行開始...');
-  
-  for(var i=0; i<toMigrate.length; i++){
-    var item = toMigrate[i];
+  for(var j=0; j<items.length; j++){
+    var it = items[j];
     try {
-      var url = await uploadKarteImage(item.record.karte_img, item.customer.id);
-      item.record.karte_img = url;
-      item.customer.updated_at = new Date().toISOString();
-      item.customer._dirty = true;
+      if(it.kind === 'karte'){
+        it.rec.karte_img = await uploadKarteImage(it.rec.karte_img, it.customer.id);
+      } else {
+        it.customer[it.field] = await uploadKarteImage(it.customer[it.field], it.customer.id+'_sig_'+it.tp);
+      }
+      it.customer.updated_at = new Date().toISOString();
+      it.customer._dirty = true;
       success++;
-      // 進捗表示（10件ごと）
-      if(i % 10 === 0){
-        toast('☁️ 移行中... ' + (i+1) + '/' + toMigrate.length);
-        // 途中経過をlocalStorageに保存
+      if(j % 10 === 0){
+        toast('☁️ 移行中... ' + (j+1) + '/' + items.length);
         saveLocal();
       }
     } catch(e){
@@ -1027,20 +1071,15 @@ async function migrateOldImages(){
       failed++;
     }
   }
-  
-  // 最終保存
-  try {
-    localStorage.setItem('cs', JSON.stringify(customers));
-  } catch(e){
-    alert('保存エラー: 空きができるはずですが失敗しました。');
-  }
-  
-  // クラウドにも同期
+  var ok = saveLocal();
+  if(ok) hideSaveError();
   syncToCloud().catch(function(e){console.warn(e);});
-  
-  var doneMsg = '✅ 移行完了\n\n成功: ' + success + '枚\n失敗: ' + failed + '枚\n\n';
-  doneMsg += '容量確認で使用量を確認してください。';
-  alert(doneMsg);
+
+  var done = '✅ 整理完了\n\n';
+  if(items.length) done += 'クラウドへ移動: ' + success + '枚' + (failed ? '（失敗 ' + failed + '枚）' : '') + '\n';
+  if(draftKeys.length) done += '古い下書き削除: ' + draftKeys.length + '件\n';
+  done += '\n「📊 保存容量を確認」で空きを確認してください。';
+  alert(done);
 }
 
 async function uploadKarteImage(dataUrl, customerId){
@@ -1053,7 +1092,8 @@ async function uploadKarteImage(dataUrl, customerId){
   while(n--) u8[n] = bstr.charCodeAt(n);
   var blob = new Blob([u8], {type: mime});
   
-  var fileName = customerId + '_' + Date.now() + '.jpg';
+  var ext = mime.indexOf('png')>=0 ? '.png' : '.jpg';
+  var fileName = customerId + '_' + Date.now() + '_' + Math.random().toString(36).slice(2,6) + ext;
   var url = SUPA_URL + '/storage/v1/object/karte-images/' + fileName;
   
   var res = await fetch(url, {
@@ -1061,7 +1101,7 @@ async function uploadKarteImage(dataUrl, customerId){
     headers: {
       'apikey': SUPA_KEY,
       'Authorization': 'Bearer ' + SUPA_KEY,
-      'Content-Type': 'image/jpeg',
+      'Content-Type': mime,
       'x-upsert': 'true'
     },
     body: blob
@@ -1706,7 +1746,24 @@ function importBackup(inp){
         renderList();
         alert('✅ 復元完了\n\n新規追加: ' + added + '人\nマージ: ' + merged + '人\n合計: ' + customers.length + '人');
       } catch(quotaErr){
-        alert('⚠️ 復元したデータが多すぎて保存できません。\n\n先に「古い画像をクラウドに移行」で容量を空けてください。\n（画面上のデータは復元されていますが、まだ保存されていません）');
+        // 容量オーバー → 端末内の画像データを外して再保存（画像はクラウドとバックアップファイルに残る）
+        var stripped = 0;
+        customers.forEach(function(c){
+          (c.records||[]).forEach(function(r){
+            if(String(r.karte_img||'').indexOf('data:')===0){ r.karte_img=''; stripped++; }
+          });
+          ['sign_img_exte','sign_img_perm','sign_img_wax'].forEach(function(f){
+            if(String(c[f]||'').indexOf('data:')===0){ c[f]=''; stripped++; }
+          });
+        });
+        try {
+          localStorage.setItem('cs', JSON.stringify(customers));
+          hideSaveError();
+          renderList();
+          alert('✅ 復元完了\n\n合計: ' + customers.length + '人\n\n※容量確保のため、端末内の画像 ' + stripped + '枚 を外しました。\n画像はクラウドとバックアップファイルに残っています。');
+        } catch(e2){
+          alert('⚠️ それでも保存できません。\nもう一度「📂 バックアップから復元」を試すか、ご連絡ください。');
+        }
       }
     } catch(err){
       alert('復元失敗: ' + err.message);
@@ -1717,26 +1774,38 @@ function importBackup(inp){
 }
 
 function checkStorage(){
-  var total = 0;
-  for(var k in localStorage){
-    if(localStorage.hasOwnProperty(k)){
-      total += (localStorage[k].length + k.length) * 2;
-    }
+  var total = 0, draftSize = 0, draftCnt = 0;
+  for(var i=0; i<localStorage.length; i++){
+    var k = localStorage.key(i), v = localStorage.getItem(k) || '';
+    var sz = (v.length + k.length) * 2;
+    total += sz;
+    if(k.indexOf('karteDraft_')===0){ draftSize += sz; draftCnt++; }
   }
-  var mb = (total / 1024 / 1024).toFixed(2);
-  var imgCount = 0, totalImgSize = 0;
+  var kCnt=0,kSize=0,sCnt=0,sSize=0,kUrl=0,sUrl=0;
   customers.forEach(function(c){
-    if(c.records){
-      c.records.forEach(function(r){
-        if(r.karte_img){
-          imgCount++;
-          totalImgSize += r.karte_img.length;
-        }
-      });
-    }
+    (c.records||[]).forEach(function(r){
+      var v = String(r.karte_img||'');
+      if(v.indexOf('data:')===0){ kCnt++; kSize += v.length*2; }
+      else if(v) kUrl++;
+    });
+    ['sign_img_exte','sign_img_perm','sign_img_wax'].forEach(function(f){
+      var v = String(c[f]||'');
+      if(v.indexOf('data:')===0){ sCnt++; sSize += v.length*2; }
+      else if(v) sUrl++;
+    });
   });
-  var imgMb = (totalImgSize / 1024 / 1024).toFixed(2);
-  alert('📊 保存容量\n\n使用量: ' + mb + ' MB / 約5 MB\n\nカルテ画像: ' + imgCount + '枚\n画像合計: ' + imgMb + ' MB\n顧客数: ' + customers.length + '人');
+  function mb(x){ return (x/1024/1024).toFixed(2); }
+  var pct = (total/(5*1024*1024)*100).toFixed(0);
+  var m = '📊 保存容量\n\n';
+  m += '使用量: ' + mb(total) + ' MB / 約5 MB（' + pct + '%）\n\n';
+  m += '【iPad内を圧迫しているもの】\n';
+  m += '署名画像: ' + sCnt + '枚（' + mb(sSize) + ' MB）\n';
+  m += 'カルテ画像: ' + kCnt + '枚（' + mb(kSize) + ' MB）\n';
+  m += '書きかけ下書き: ' + draftCnt + '件（' + mb(draftSize) + ' MB）\n\n';
+  m += '【クラウド保存済み（容量を使わない）】\n';
+  m += 'カルテ画像: ' + kUrl + '枚 / 署名: ' + sUrl + '枚\n\n';
+  m += '顧客数: ' + customers.length + '人';
+  alert(m);
 }
 
 function cleanOldImages(){
@@ -1812,7 +1881,7 @@ setTimeout(function(){
     if(pct >= 80){
       var d = document.createElement('div');
       d.style.cssText = 'position:fixed;top:0;left:0;right:0;background:'+(pct>=95?'#C0392B':'#E67E22')+';color:#fff;padding:10px 30px 10px 14px;z-index:99998;font-size:13px;font-weight:700;text-align:center;line-height:1.5';
-      d.innerHTML = '⚠️ 保存容量 '+pct.toFixed(0)+'% 使用中<br><span style="font-weight:400;font-size:11px">「💾 バックアップ」→「☁️ 古い画像をクラウドに移行」で空きを作ってください</span>'
+      d.innerHTML = '⚠️ 保存容量 '+pct.toFixed(0)+'% 使用中<br><span style="font-weight:400;font-size:11px">「💾 バックアップ」→「☁️ 画像をクラウドに移して容量を空ける」を押してください</span>'
         +'<span onclick="this.parentNode.style.display=\'none\'" style="position:absolute;right:12px;top:8px;font-size:18px;cursor:pointer">×</span>';
       document.body.appendChild(d);
     }
